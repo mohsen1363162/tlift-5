@@ -892,7 +892,7 @@ export function reconcileScheduledServicesWithContracts(shouldSave = false): boo
   let changed = false;
 
   // 1. همگام‌سازی وضعیت کارهای زمان‌بندی‌شده با جزئیات واقعی قراردادها
-  scheduledServices = scheduledServices.map((s) => {
+  const updatedServices = scheduledServices.map((s) => {
     if (!s.contractId) return s;
     const cd = contractDetailsMap[s.contractId];
     if (!cd || !cd.months) return s;
@@ -914,7 +914,12 @@ export function reconcileScheduledServicesWithContracts(shouldSave = false): boo
     return s;
   });
 
+  if (changed) {
+    scheduledServices = updatedServices;
+  }
+
   // 2. درج خودکار خدمات انجام‌شده توسط همکاران در مهرماه یا ماه‌های دیگر در لیست زمان‌بندی
+  const newServices: ScheduledService[] = [];
   contracts.forEach((c) => {
     const cd = contractDetailsMap[c.id];
     if (!cd || !cd.months) return;
@@ -922,10 +927,12 @@ export function reconcileScheduledServicesWithContracts(shouldSave = false): boo
       if (!m.done) return;
       const exists = scheduledServices.some(
         (s) => s.contractId === c.id && (s.monthId === m.id || (m.date && s.actualDate === m.date))
+      ) || newServices.some(
+        (s) => s.contractId === c.id && (s.monthId === m.id || (m.date && s.actualDate === m.date))
       );
       if (!exists) {
         const normDate = normalizeServiceJalaliDate(m.date) || "1405/07/06";
-        scheduledServices.push({
+        newServices.push({
           id: `srv-c${c.id}-m${m.id}`,
           contractId: c.id,
           monthId: m.id,
@@ -947,6 +954,10 @@ export function reconcileScheduledServicesWithContracts(shouldSave = false): boo
       }
     });
   });
+
+  if (newServices.length > 0) {
+    scheduledServices = [...scheduledServices, ...newServices];
+  }
 
   if (changed && shouldSave) {
     saveStorage("tlift_scheduled_services", scheduledServices);
@@ -1909,10 +1920,7 @@ export const appStore = {
   },
 
   // SCHEDULED SERVICES
-  getScheduledServices: () => {
-    reconcileScheduledServicesWithContracts(false);
-    return scheduledServices;
-  },
+  getScheduledServices: () => scheduledServices,
   toggleScheduledServiceStatus: (id: string) => {
     let targetService: ScheduledService | undefined;
     scheduledServices = scheduledServices.map((s) => {
@@ -2234,10 +2242,7 @@ export function useScheduledServices() {
       listeners.add(callback);
       return () => listeners.delete(callback);
     },
-    () => {
-      reconcileScheduledServicesWithContracts(false);
-      return scheduledServices;
-    }
+    () => scheduledServices
   );
 }
 
