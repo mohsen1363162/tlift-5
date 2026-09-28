@@ -1,0 +1,8 @@
+export type AppErrorLog={id:string;at:number;source:"render"|"javascript"|"promise";message:string;stack?:string;version:string;url:string};
+const KEY="tlift_error_logs_v1";
+const clean=(value:string)=>value.replace(/(?:\+98|0)?9\d{9}/g,"[شماره حذف شد]").slice(0,4000);
+export const getErrorLogs=():AppErrorLog[]=>{try{return JSON.parse(localStorage.getItem(KEY)||"[]")}catch{return[]}};
+export function logAppError(source:AppErrorLog["source"],error:unknown,version:string){const e=error instanceof Error?error:new Error(String(error));const item:AppErrorLog={id:`err-${Date.now()}-${Math.random().toString(36).slice(2,6)}`,at:Date.now(),source,message:clean(e.message||"خطای نامشخص"),stack:e.stack?clean(e.stack):undefined,version,url:location.pathname};const logs=[item,...getErrorLogs()].slice(0,50);try{localStorage.setItem(KEY,JSON.stringify(logs))}catch (err) { void err; }return item}
+export const clearErrorLogs=()=>localStorage.removeItem(KEY);
+export function startGlobalErrorLogging(version:string){window.addEventListener("error",event=>logAppError("javascript",event.error||event.message,version));window.addEventListener("unhandledrejection",event=>logAppError("promise",event.reason,version));}
+export function downloadErrorReport(){const logs=getErrorLogs();const payload={generatedAt:new Date().toISOString(),version:logs[0]?.version||"unknown",userAgent:navigator.userAgent,online:navigator.onLine,logs};const url=URL.createObjectURL(new Blob([JSON.stringify(payload,null,2)],{type:"application/json"}));const a=document.createElement("a");a.href=url;a.download=`tlift-error-report-${Date.now()}.json`;a.click();URL.revokeObjectURL(url);return logs.length}

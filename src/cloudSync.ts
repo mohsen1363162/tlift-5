@@ -349,7 +349,7 @@ function autoMergeConflict(key: string, serverData: unknown, localData: unknown)
 
 async function fetchWithDeviceAuth(endpoint: string, init?: RequestInit) {
   let token = await getDeviceToken();
-  let separator = endpoint.includes("?") ? "&" : "?";
+  const separator = endpoint.includes("?") ? "&" : "?";
   let response = await withTimeout(fetch(`${endpoint}${separator}token=${encodeURIComponent(token)}`, init));
   if (response.status === 401) {
     // توکن دستگاه ممکن است بعد از تعویض فایل‌های هاست یا پاک‌شدن registry منقضی شده باشد.
