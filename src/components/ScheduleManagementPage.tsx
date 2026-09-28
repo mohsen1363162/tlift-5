@@ -28,12 +28,30 @@ import {
   AlertCircle,
   AlertTriangle,
   SlidersHorizontal,
+  HelpCircle,
+  Info,
+  CalendarRange,
 } from "lucide-react";
 import { ScheduledService, appStore, useScheduledServices, useStaff, useZones, useContracts, normalizeServiceJalaliDate } from "../store";
 import { Theme } from "../theme";
 import ServiceForm from "../ServiceForm";
 import ContractRibbonBar from "./ContractRibbonBar";
 import BreakdownModal from "./BreakdownModal";
+
+const JALALI_MONTH_OPTIONS = [
+  { num: "01", name: "فروردین" },
+  { num: "02", name: "اردیبهشت" },
+  { num: "03", name: "خرداد" },
+  { num: "04", name: "تیر" },
+  { num: "05", name: "مرداد" },
+  { num: "06", name: "شهریور" },
+  { num: "07", name: "مهر" },
+  { num: "08", name: "آبان" },
+  { num: "09", name: "آذر" },
+  { num: "10", name: "دی" },
+  { num: "11", name: "بهمن" },
+  { num: "12", name: "اسفند" },
+];
 
 interface ScheduleManagementPageProps {
   t: Theme;
@@ -52,7 +70,11 @@ export default function ScheduleManagementPage({
   const contracts = useContracts();
 
   // Filters
-  const [selectedMonth, setSelectedMonth] = useState<"all" | "1405/07" | "1405/06">("1405/07");
+  const [selectedMonth, setSelectedMonth] = useState<string>("1405/06");
+  const [startDate, setStartDate] = useState<string>("");
+  const [endDate, setEndDate] = useState<string>("");
+  const [dayPreset, setDayPreset] = useState<string>("all");
+  const [showPendingInfo, setShowPendingInfo] = useState<boolean>(false);
   const [selectedStatus, setSelectedStatus] = useState<"all" | "done" | "pending">("all");
   const [selectedTech, setSelectedTech] = useState<string>("all");
   const [selectedCustomer, setSelectedCustomer] = useState<string>("all");
@@ -128,13 +150,38 @@ export default function ScheduleManagementPage({
     return Array.from(set);
   }, [services, registeredZones]);
 
+  const monthCounts = useMemo(() => {
+    let s06 = 0;
+    let s07 = 0;
+    services.forEach((s) => {
+      const norm = normalizeServiceJalaliDate(s.date);
+      if (norm.startsWith("1405/06")) s06++;
+      if (norm.startsWith("1405/07")) s07++;
+    });
+    return { "1405/06": s06, "1405/07": s07 };
+  }, [services]);
+
+  const toFaDigits = (n: number | string) => Number(n || 0).toLocaleString("fa-IR");
+
   // Filtered services
   const filteredServices = useMemo(() => {
+    const normStart = startDate ? normalizeServiceJalaliDate(startDate) : "";
+    const normEnd = endDate ? normalizeServiceJalaliDate(endDate) : "";
+
     return services.filter((s) => {
       const normDate = normalizeServiceJalaliDate(s.date);
-      // Month filter
-      if (selectedMonth === "1405/07" && !normDate.startsWith("1405/07")) return false;
-      if (selectedMonth === "1405/06" && !normDate.startsWith("1405/06")) return false;
+
+      // 1. Explicit start date filter
+      if (normStart && normDate < normStart) return false;
+
+      // 2. Explicit end date filter
+      if (normEnd && normDate > normEnd) return false;
+
+      // 3. Month filter (if neither start nor end date is set)
+      if (!normStart && !normEnd && selectedMonth !== "all") {
+        if (!normDate.startsWith(selectedMonth)) return false;
+      }
+
       // Status filter
       if (selectedStatus !== "all" && s.status !== selectedStatus) return false;
       // Tech filter
@@ -157,7 +204,7 @@ export default function ScheduleManagementPage({
       }
       return true;
     });
-  }, [services, selectedMonth, selectedStatus, selectedTech, selectedCustomer, selectedZone, searchQuery]);
+  }, [services, selectedMonth, startDate, endDate, selectedStatus, selectedTech, selectedCustomer, selectedZone, searchQuery]);
 
   // Group services by date
   const groupedByDay = useMemo(() => {
@@ -169,6 +216,20 @@ export default function ScheduleManagementPage({
       if (!map[day]) map[day] = [];
       map[day].push(s);
     });
+
+    // If explicit start and end date are provided within the same month, ensure every day has a column:
+    const sNorm = startDate ? normalizeServiceJalaliDate(startDate) : "";
+    const eNorm = endDate ? normalizeServiceJalaliDate(endDate) : "";
+    if (sNorm && eNorm && sNorm <= eNorm) {
+      const sParts = sNorm.split("/").map(Number);
+      const eParts = eNorm.split("/").map(Number);
+      if (sParts[0] === eParts[0] && sParts[1] === eParts[1] && eParts[2] >= sParts[2] && eParts[2] - sParts[2] <= 31) {
+        for (let d = sParts[2]; d <= eParts[2]; d++) {
+          const dStr = `${sParts[0]}/${String(sParts[1]).padStart(2, "0")}/${String(d).padStart(2, "0")}`;
+          if (!map[dStr]) map[dStr] = [];
+        }
+      }
+    }
 
     // CRITICAL USER REQUIREMENT:
     // "هر کدوم از سرویسها که انجام میشن کنارش انجام شد زده میشه و انجام نشدهها به سمت بالا میان تا من ببینم و انجام بدم."
@@ -187,7 +248,7 @@ export default function ScheduleManagementPage({
     });
 
     return result;
-  }, [filteredServices]);
+  }, [filteredServices, startDate, endDate]);
 
   // Quick stats
   const totalCount = filteredServices.length;
@@ -375,199 +436,414 @@ export default function ScheduleManagementPage({
       dir="rtl"
       onClick={() => setActiveMenuId(null)}
     >
-      {/* Top Filter & Toolbar (Matching sshot-46.png) */}
+      {/* Top Filter & Toolbar */}
       <div
-        className={`flex flex-wrap items-center justify-between gap-2 border-b p-2.5 text-[12px] ${t.chrome} ${t.border} shadow-sm`}
+        className={`flex flex-col gap-2 border-b p-2.5 text-[12px] ${t.chrome} ${t.border} shadow-sm`}
       >
-        {/* Right side controls (Filters) */}
-        <div className="flex flex-wrap items-center gap-2">
-          {/* Month selector buttons */}
-          <div className="flex items-center gap-1 rounded bg-black/30 border border-zinc-700/60 p-0.5 text-[11px]">
-            <button
-              type="button"
-              onClick={() => setSelectedMonth("1405/07")}
-              className={`rounded px-2.5 py-1 font-bold transition cursor-pointer ${
-                selectedMonth === "1405/07"
-                  ? "bg-amber-500 text-black shadow-sm"
-                  : "text-zinc-400 hover:text-white"
-              }`}
-            >
-              مهر ۱۴۰۵ (جاری)
-            </button>
-            <button
-              type="button"
-              onClick={() => setSelectedMonth("1405/06")}
-              className={`rounded px-2.5 py-1 font-bold transition cursor-pointer ${
-                selectedMonth === "1405/06"
-                  ? "bg-amber-500 text-black shadow-sm"
-                  : "text-zinc-400 hover:text-white"
-              }`}
-            >
-              شهریور ۱۴۰۵
-            </button>
-            <button
-              type="button"
-              onClick={() => setSelectedMonth("all")}
-              className={`rounded px-2.5 py-1 font-bold transition cursor-pointer ${
-                selectedMonth === "all"
-                  ? "bg-amber-500 text-black shadow-sm"
-                  : "text-zinc-400 hover:text-white"
-              }`}
-            >
-              همه ماه‌ها
-            </button>
+        {/* Row 1: Date Range, Month selection, Quick Presets & Counters */}
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          {/* Right: Date range selection & quick presets */}
+          <div className="flex flex-wrap items-center gap-1.5">
+            {/* Label */}
+            <div className="flex items-center gap-1 text-[11.5px] font-semibold text-zinc-300 ml-1">
+              <CalendarRange size={13} className="text-amber-400" />
+              <span>تقویم و بازه تاریخ:</span>
+            </div>
+
+            {/* Month Buttons: شهریور ۱۴۰۵, مهر ۱۴۰۵, همه ماه‌ها, سایر ماه‌ها */}
+            <div className="flex items-center gap-1 rounded bg-black/30 border border-zinc-700/60 p-0.5 text-[11px]">
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedMonth("1405/06");
+                  setStartDate("");
+                  setEndDate("");
+                  setDayPreset("all");
+                }}
+                className={`flex items-center gap-1.5 rounded px-2.5 py-1 font-bold transition cursor-pointer ${
+                  selectedMonth === "1405/06" && !startDate && !endDate
+                    ? "bg-amber-500 text-black shadow-sm"
+                    : "text-zinc-300 hover:text-white"
+                }`}
+              >
+                <span>شهریور ۱۴۰۵</span>
+                {monthCounts["1405/06"] > 0 && (
+                  <span
+                    className={`rounded px-1 text-[10px] ${
+                      selectedMonth === "1405/06" && !startDate && !endDate
+                        ? "bg-black/20 text-black"
+                        : "bg-zinc-800 text-amber-400"
+                    }`}
+                  >
+                    ({toFaDigits(monthCounts["1405/06"])})
+                  </span>
+                )}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedMonth("1405/07");
+                  setStartDate("");
+                  setEndDate("");
+                  setDayPreset("all");
+                }}
+                className={`flex items-center gap-1.5 rounded px-2.5 py-1 font-bold transition cursor-pointer ${
+                  selectedMonth === "1405/07" && !startDate && !endDate
+                    ? "bg-amber-500 text-black shadow-sm"
+                    : "text-zinc-300 hover:text-white"
+                }`}
+              >
+                <span>مهر ۱۴۰۵</span>
+                {monthCounts["1405/07"] > 0 && (
+                  <span
+                    className={`rounded px-1 text-[10px] ${
+                      selectedMonth === "1405/07" && !startDate && !endDate
+                        ? "bg-black/20 text-black"
+                        : "bg-zinc-800 text-amber-400"
+                    }`}
+                  >
+                    ({toFaDigits(monthCounts["1405/07"])})
+                  </span>
+                )}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedMonth("all");
+                  setStartDate("");
+                  setEndDate("");
+                  setDayPreset("all");
+                }}
+                className={`rounded px-2.5 py-1 font-bold transition cursor-pointer ${
+                  selectedMonth === "all" && !startDate && !endDate
+                    ? "bg-amber-500 text-black shadow-sm"
+                    : "text-zinc-400 hover:text-white"
+                }`}
+              >
+                همه ماه‌ها
+              </button>
+
+              {/* Month selector dropdown for any month/year */}
+              <select
+                value={selectedMonth.startsWith("140") ? selectedMonth : ""}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  if (val) {
+                    setSelectedMonth(val);
+                    setStartDate("");
+                    setEndDate("");
+                    setDayPreset("all");
+                  }
+                }}
+                className="bg-transparent text-[11px] text-zinc-300 px-1 py-0.5 outline-none cursor-pointer border-r border-zinc-700 mr-1"
+                title="انتخاب سایر ماه‌ها و سال‌ها"
+              >
+                <option value="" disabled className="bg-zinc-800 text-zinc-400">سایر ماه‌ها...</option>
+                {["1405", "1404", "1406"].flatMap((y) =>
+                  JALALI_MONTH_OPTIONS.map((m) => (
+                    <option key={`${y}/${m.num}`} value={`${y}/${m.num}`} className="bg-zinc-800 text-zinc-200">
+                      {m.name} {y}
+                    </option>
+                  ))
+                )}
+              </select>
+            </div>
+
+            {/* Separator */}
+            <span className="text-zinc-600 hidden sm:inline">|</span>
+
+            {/* Custom Date Range: "از تاریخ" تا "تا تاریخ" */}
+            <div className="flex items-center gap-1 bg-black/40 border border-zinc-700/70 rounded px-2 py-0.5 text-[11px]">
+              <span className="text-zinc-400 font-medium">از:</span>
+              <input
+                type="text"
+                value={startDate}
+                onChange={(e) => {
+                  setStartDate(e.target.value);
+                  setDayPreset("custom");
+                }}
+                placeholder="۱۴۰۵/۰۶/۰۱"
+                className="w-20 bg-transparent text-center text-zinc-100 font-mono outline-none border-b border-transparent focus:border-amber-400 placeholder:text-zinc-600 text-[11px]"
+                dir="ltr"
+              />
+              <span className="text-zinc-500">تا:</span>
+              <input
+                type="text"
+                value={endDate}
+                onChange={(e) => {
+                  setEndDate(e.target.value);
+                  setDayPreset("custom");
+                }}
+                placeholder="۱۴۰۵/۰۶/۰۶"
+                className="w-20 bg-transparent text-center text-zinc-100 font-mono outline-none border-b border-transparent focus:border-amber-400 placeholder:text-zinc-600 text-[11px]"
+                dir="ltr"
+              />
+              {(startDate || endDate) && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setStartDate("");
+                    setEndDate("");
+                    setDayPreset("all");
+                  }}
+                  className="text-zinc-400 hover:text-red-400 p-0.5 transition cursor-pointer"
+                  title="پاک کردن بازه تاریخ"
+                >
+                  <X size={12} />
+                </button>
+              )}
+            </div>
+
+            {/* Quick Day Presets */}
+            <div className="flex items-center gap-1 rounded bg-black/25 border border-zinc-700/60 p-0.5 text-[10.5px]">
+              <span className="text-[10px] text-zinc-400 px-1 font-medium hidden md:inline">انتخاب روز:</span>
+              <button
+                type="button"
+                onClick={() => {
+                  const m = selectedMonth === "all" ? "1405/06" : selectedMonth;
+                  setStartDate(`${m}/01`);
+                  setEndDate(`${m}/06`);
+                  setDayPreset("1-6");
+                }}
+                className={`rounded px-2 py-0.5 font-bold transition cursor-pointer ${
+                  dayPreset === "1-6"
+                    ? "bg-amber-500 text-black shadow-sm"
+                    : "text-amber-400 hover:bg-zinc-800"
+                }`}
+                title="نمایش فقط روزهای ۱ تا ۶ ماه انتخابی"
+              >
+                ⚡ ۱ تا ۶ ماه
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const m = selectedMonth === "all" ? "1405/06" : selectedMonth;
+                  setStartDate(`${m}/01`);
+                  setEndDate(`${m}/15`);
+                  setDayPreset("1-15");
+                }}
+                className={`rounded px-1.5 py-0.5 transition cursor-pointer ${
+                  dayPreset === "1-15"
+                    ? "bg-amber-500 text-black font-bold shadow-sm"
+                    : "text-zinc-400 hover:text-white"
+                }`}
+              >
+                ۱ تا ۱۵
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const m = selectedMonth === "all" ? "1405/06" : selectedMonth;
+                  setStartDate(`${m}/16`);
+                  setEndDate(`${m}/30`);
+                  setDayPreset("16-end");
+                }}
+                className={`rounded px-1.5 py-0.5 transition cursor-pointer ${
+                  dayPreset === "16-end"
+                    ? "bg-amber-500 text-black font-bold shadow-sm"
+                    : "text-zinc-400 hover:text-white"
+                }`}
+              >
+                ۱۶ تا ۳۰
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setStartDate("");
+                  setEndDate("");
+                  setDayPreset("all");
+                }}
+                className={`rounded px-1.5 py-0.5 transition cursor-pointer ${
+                  dayPreset === "all" && !startDate && !endDate
+                    ? "bg-zinc-700 text-white font-bold"
+                    : "text-zinc-500 hover:text-zinc-300"
+                }`}
+              >
+                کل ماه
+              </button>
+            </div>
           </div>
 
-          {/* Status selector tabs */}
-          <div className="flex items-center gap-1 rounded bg-black/30 border border-zinc-700/60 p-0.5 text-[11px]">
-            <button
-              type="button"
-              onClick={() => setSelectedStatus("all")}
-              className={`flex items-center gap-1 rounded px-2 py-0.5 font-medium transition cursor-pointer ${
-                selectedStatus === "all"
-                  ? "bg-zinc-700 text-white shadow-sm"
-                  : "text-zinc-400 hover:text-white"
-              }`}
-            >
-              <span>همه</span>
-              <span className="font-bold text-amber-400">({totalCount})</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setSelectedStatus("done")}
-              className={`flex items-center gap-1 rounded px-2 py-0.5 font-medium transition cursor-pointer ${
-                selectedStatus === "done"
-                  ? "bg-emerald-900/80 text-emerald-200 border border-emerald-600/50 shadow-sm"
-                  : "text-zinc-400 hover:text-emerald-400"
-              }`}
-            >
-              <CheckCircle2 size={11} className="text-emerald-400" />
-              <span>انجام شده</span>
-              <span className="font-bold text-emerald-400">({doneCount})</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setSelectedStatus("pending")}
-              className={`flex items-center gap-1 rounded px-2 py-0.5 font-medium transition cursor-pointer ${
-                selectedStatus === "pending"
-                  ? "bg-red-950/80 text-red-200 border border-red-600/50 shadow-sm"
-                  : "text-zinc-400 hover:text-red-400"
-              }`}
-            >
-              <Clock size={11} className="text-red-400" />
-              <span>در انتظار</span>
-              <span className="font-bold text-red-400">({pendingCount})</span>
-            </button>
-          </div>
+          {/* Left: Summary Counter Badge & Actions */}
+          <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5 rounded bg-black/30 border border-zinc-700/60 px-2.5 py-1 text-[11.5px] text-zinc-300 font-medium">
+              <span className="text-amber-400 font-bold">{totalCount}</span>
+              <span>مورد در این بازه</span>
+              <span className="text-zinc-600">|</span>
+              <button
+                type="button"
+                onClick={() => setSelectedStatus("done")}
+                className={`font-bold transition hover:underline cursor-pointer ${selectedStatus === "done" ? "text-emerald-300 underline" : "text-emerald-400"}`}
+              >
+                {doneCount} انجام شده
+              </button>
+              <span className="text-zinc-600">|</span>
+              <button
+                type="button"
+                onClick={() => setShowPendingInfo(true)}
+                className="flex items-center gap-1 text-red-400 font-bold hover:underline cursor-pointer group"
+                title="برای مشاهده توضیح کامل کلیک کنید"
+              >
+                <span className={selectedStatus === "pending" ? "underline text-red-300" : ""}>{pendingCount} در انتظار</span>
+                <HelpCircle size={12} className="text-red-400/80 group-hover:text-red-200" />
+              </button>
+            </div>
 
-          {/* Technician Dropdown */}
-          <div className="relative">
-            <select
-              value={selectedTech}
-              onChange={(e) => setSelectedTech(e.target.value)}
-              className={`h-7 rounded border px-2.5 text-[11.5px] outline-none ${t.input} cursor-pointer`}
-            >
-              <option value="all">همه سرویسکاران</option>
-              {allTechs.map((tch) => (
-                <option key={tch} value={tch}>
-                  {tch}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {/* Customer Dropdown */}
-          <div className="relative">
-            <select
-              value={selectedCustomer}
-              onChange={(e) => setSelectedCustomer(e.target.value)}
-              className={`h-7 rounded border px-2.5 text-[11.5px] outline-none ${t.input} cursor-pointer`}
-            >
-              <option value="all">همه مشتریان</option>
-              {allCustomers.map((cust) => (
-                <option key={cust} value={cust}>
-                  {cust}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {/* Zone Dropdown */}
-          <div className="relative">
-            <select
-              value={selectedZone}
-              onChange={(e) => setSelectedZone(e.target.value)}
-              className={`h-7 rounded border px-2.5 text-[11.5px] outline-none ${t.input} cursor-pointer`}
-            >
-              <option value="all">همه منطقه‌ها</option>
-              {allZones.map((z) => (
-                <option key={z} value={z}>
-                  {z}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {/* Search query */}
-          <div className={`flex h-7 items-center gap-1.5 rounded border px-2 ${t.input}`}>
-            <Search size={12} className={t.sub} />
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="جستجو در نام، قرارداد، مشتری..."
-              className="w-36 bg-transparent text-[11px] outline-none placeholder:text-zinc-500"
-            />
-            {searchQuery && (
-              <button type="button" onClick={() => setSearchQuery("")}>
-                <X size={11} className="text-zinc-400" />
+            {/* Batch done action */}
+            {selectedServices.length > 0 && (
+              <button
+                type="button"
+                onClick={handleBatchToggleDone}
+                className="flex items-center gap-1 rounded bg-emerald-700 hover:bg-emerald-600 px-2.5 py-1 text-[11.5px] font-medium text-white transition shadow-sm cursor-pointer"
+              >
+                <CheckCircle2 size={12} />
+                <span>ثبت انجام {selectedServices.length} مورد</span>
               </button>
             )}
+
+            {/* Add New Service Visit Button */}
+            <button
+              type="button"
+              onClick={() => setModalType("newService")}
+              className="flex items-center gap-1 rounded bg-amber-600 hover:bg-amber-500 px-2.5 py-1 text-[11.5px] font-bold text-black transition shadow-sm cursor-pointer"
+            >
+              <Plus size={13} />
+              <span>ثبت سرویس جدید</span>
+            </button>
           </div>
         </div>
 
-        {/* Left side actions & Count badge */}
-        <div className="flex items-center gap-2">
-          <div className="flex items-center gap-1 rounded bg-black/20 border border-zinc-700/50 px-2 py-1 text-[11.5px] text-zinc-300 font-medium">
-            <span className="text-amber-400 font-bold">{totalCount}</span>
-            <span>مورد یافت شد.</span>
-            <span className="mx-1 text-zinc-600">|</span>
-            <span className="text-emerald-400 font-bold">{doneCount} انجام شده</span>
-            <span className="mx-1 text-zinc-600">|</span>
-            <span className="text-red-400 font-bold">{pendingCount} در انتظار</span>
+        {/* Row 2: Status Tabs, Technician, Customer, Zone & Search Filters */}
+        <div className="flex flex-wrap items-center justify-between gap-2 pt-1.5 border-t border-zinc-800/80">
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Status selector tabs */}
+            <div className="flex items-center gap-1 rounded bg-black/30 border border-zinc-700/60 p-0.5 text-[11px]">
+              <button
+                type="button"
+                onClick={() => setSelectedStatus("all")}
+                className={`flex items-center gap-1 rounded px-2.5 py-0.5 font-medium transition cursor-pointer ${
+                  selectedStatus === "all"
+                    ? "bg-zinc-700 text-white shadow-sm"
+                    : "text-zinc-400 hover:text-white"
+                }`}
+              >
+                <span>همه</span>
+                <span className="font-bold text-amber-400">({totalCount})</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setSelectedStatus("done")}
+                className={`flex items-center gap-1 rounded px-2.5 py-0.5 font-medium transition cursor-pointer ${
+                  selectedStatus === "done"
+                    ? "bg-emerald-900/80 text-emerald-200 border border-emerald-600/50 shadow-sm"
+                    : "text-zinc-400 hover:text-emerald-400"
+                }`}
+              >
+                <CheckCircle2 size={11} className="text-emerald-400" />
+                <span>انجام شده</span>
+                <span className="font-bold text-emerald-400">({doneCount})</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setSelectedStatus("pending")}
+                className={`flex items-center gap-1 rounded px-2.5 py-0.5 font-medium transition cursor-pointer ${
+                  selectedStatus === "pending"
+                    ? "bg-red-950/80 text-red-200 border border-red-600/50 shadow-sm"
+                    : "text-zinc-400 hover:text-red-400"
+                }`}
+                title="سرویس‌هایی که هنوز توسط سرویس‌کار انجام نشده و در نوبت هستند"
+              >
+                <Clock size={11} className="text-red-400" />
+                <span>در انتظار سرویس</span>
+                <span className="font-bold text-red-400">({pendingCount})</span>
+              </button>
+            </div>
+
+            {/* Technician Dropdown */}
+            <div className="relative">
+              <select
+                value={selectedTech}
+                onChange={(e) => setSelectedTech(e.target.value)}
+                className={`h-7 rounded border px-2.5 text-[11.5px] outline-none ${t.input} cursor-pointer`}
+              >
+                <option value="all">همه سرویسکاران</option>
+                {allTechs.map((tch) => (
+                  <option key={tch} value={tch}>
+                    {tch}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Customer Dropdown */}
+            <div className="relative">
+              <select
+                value={selectedCustomer}
+                onChange={(e) => setSelectedCustomer(e.target.value)}
+                className={`h-7 rounded border px-2.5 text-[11.5px] outline-none ${t.input} cursor-pointer`}
+              >
+                <option value="all">همه مشتریان</option>
+                {allCustomers.map((cust) => (
+                  <option key={cust} value={cust}>
+                    {cust}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Zone Dropdown */}
+            <div className="relative">
+              <select
+                value={selectedZone}
+                onChange={(e) => setSelectedZone(e.target.value)}
+                className={`h-7 rounded border px-2.5 text-[11.5px] outline-none ${t.input} cursor-pointer`}
+              >
+                <option value="all">همه منطقه‌ها</option>
+                {allZones.map((z) => (
+                  <option key={z} value={z}>
+                    {z}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Search query */}
+            <div className={`flex h-7 items-center gap-1.5 rounded border px-2 ${t.input}`}>
+              <Search size={12} className={t.sub} />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="جستجو در نام، قرارداد، مشتری..."
+                className="w-36 bg-transparent text-[11px] outline-none placeholder:text-zinc-500"
+              />
+              {searchQuery && (
+                <button type="button" onClick={() => setSearchQuery("")}>
+                  <X size={11} className="text-zinc-400" />
+                </button>
+              )}
+            </div>
           </div>
 
-          {/* Apply button */}
-          <button
-            type="button"
-            onClick={() => onShowToast?.("فیلترها با موفقیت اعمال شدند.")}
-            className={`flex items-center gap-1 rounded border px-3 py-1 text-[11.5px] font-medium transition ${t.input} ${t.hover}`}
-          >
-            <Filter size={12} className="text-amber-400" />
-            <span>اعمال تغییر</span>
-          </button>
-
-          {/* Batch done action */}
-          {selectedServices.length > 0 && (
+          {/* Quick Info & Refresh */}
+          <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={handleBatchToggleDone}
-              className="flex items-center gap-1 rounded bg-emerald-700 hover:bg-emerald-600 px-2.5 py-1 text-[11.5px] font-medium text-white transition shadow-sm"
+              onClick={() => setShowPendingInfo(true)}
+              className="flex items-center gap-1 text-[11px] text-zinc-400 hover:text-amber-400 transition cursor-pointer"
             >
-              <CheckCircle2 size={12} />
-              <span>ثبت انجام {selectedServices.length} مورد</span>
+              <Info size={12} />
+              <span>راهنمای وضعیت «در انتظار»</span>
             </button>
-          )}
-
-          {/* Add New Service Visit Button */}
-          <button
-            type="button"
-            onClick={() => setModalType("newService")}
-            className="flex items-center gap-1 rounded bg-amber-600 hover:bg-amber-500 px-2.5 py-1 text-[11.5px] font-bold text-black transition shadow-sm"
-          >
-            <Plus size={13} />
-            <span>ثبت سرویس جدید</span>
-          </button>
+            <button
+              type="button"
+              onClick={() => onShowToast?.("فیلترها با موفقیت اعمال شدند.")}
+              className={`flex items-center gap-1 rounded border px-3 py-1 text-[11.5px] font-medium transition ${t.input} ${t.hover} cursor-pointer`}
+            >
+              <Filter size={12} className="text-amber-400" />
+              <span>اعمال تغییر</span>
+            </button>
+          </div>
         </div>
       </div>
 
@@ -1556,6 +1832,84 @@ export default function ScheduleManagementPage({
           </div>
         </div>
       )}
+
+      {/* Explanation Modal for "در انتظار" (Pending Status) */}
+      {showPendingInfo && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm"
+          onClick={() => setShowPendingInfo(false)}
+        >
+          <div
+            className="w-full max-w-lg rounded-xl border border-zinc-700 bg-[#1e2024] p-5 shadow-2xl text-right text-zinc-100 animate-in fade-in zoom-in-95 duration-150"
+            onClick={(e) => e.stopPropagation()}
+            dir="rtl"
+          >
+            <div className="flex items-center justify-between border-b border-zinc-700 pb-3 mb-3">
+              <div className="flex items-center gap-2">
+                <Clock className="text-red-400" size={20} />
+                <h3 className="font-bold text-[14.5px] text-white">
+                  وضعیت «در انتظار» یعنی چی؟ (راهنمای کامل)
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowPendingInfo(false)}
+                className="rounded p-1 text-zinc-400 hover:bg-zinc-800 hover:text-white transition"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="space-y-3.5 text-[12.5px] leading-relaxed text-zinc-300">
+              <p>
+                عبارت <strong className="text-red-400 font-bold">«{pendingCount} در انتظار»</strong> به معنای{" "}
+                <strong>سرویس‌های دوره‌ای آسانسور است که در تقویم یا برنامه زمان‌بندی ثبت شده‌اند، اما هنوز سرویسکار به محل نرفته یا چک‌لیست سرویس تأیید نهایی نشده است.</strong>
+              </p>
+
+              <div className="rounded-lg bg-red-950/30 border border-red-800/40 p-3 text-zinc-200 space-y-2">
+                <div className="flex items-center gap-1.5 font-bold text-red-300 text-[13px]">
+                  <span>تفاوت «در انتظار» و «انجام شده»:</span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11.5px] pt-1">
+                  <div className="rounded bg-black/40 border border-red-700/30 p-2">
+                    <span className="font-bold text-red-400 block mb-1">⏳ در انتظار (قرمز):</span>
+                    <span>موعد سرویس ماهانه فرا رسیده و این آسانسور در صف سرویس توسط تکنسین قرار دارد.</span>
+                  </div>
+                  <div className="rounded bg-black/40 border border-emerald-700/30 p-2">
+                    <span className="font-bold text-emerald-400 block mb-1">✓ انجام شده (سبز):</span>
+                    <span>تکنسین آسانسور را سرویس کرده، چک‌لیست پر شده و تیک انجام آن ثبت گردیده است.</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="rounded-lg bg-black/30 border border-zinc-700/60 p-3 space-y-1.5 text-[11.5px]">
+                <span className="font-bold text-amber-400 block text-[12px]">چگونه از حالت «در انتظار» خارج می‌شود؟</span>
+                <p>
+                  ۱. با کلیک بر روی دکمه دایره‌ای تیک روی هر کارت، یا زدن «انجام شد»، سرویس بلافاصله تأیید می‌شود.<br />
+                  ۲. با زدن دکمه «ثبت گزارش»، اطلاعات تکنسین و قطعات پر شده و به لیست انجام‌شده اضافه می‌شود.<br />
+                  ۳. با هر بار تأیید، یک عدد از «در انتظار» کم شده و به «انجام شده» افزوده می‌شود.
+                </p>
+              </div>
+
+              <p className="text-[11.5px] text-zinc-400">
+                💡 نکته: با فیلتر بالای صفحه (از روز ۱ تا ۶، یا انتخاب ماه‌ها) می‌توانید فقط برنامه همان روزها را مشاهده نمایید.
+              </p>
+            </div>
+
+            <div className="mt-4 flex items-center justify-between border-t border-zinc-800 pt-3">
+              <span className="text-[11px] text-zinc-500">سامانه خدمات و نگهداری آسانسور آسمان سرا</span>
+              <button
+                type="button"
+                onClick={() => setShowPendingInfo(false)}
+                className="rounded-lg bg-amber-500 px-4 py-1.5 text-[12px] font-bold text-black hover:bg-amber-400 transition"
+              >
+                متوجه شدم
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Unified Breakdown Registration Modal */}
       <BreakdownModal
         isOpen={!!breakdownService}

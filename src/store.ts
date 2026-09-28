@@ -891,77 +891,137 @@ export function normalizeServiceJalaliDate(val?: string): string {
 export function reconcileScheduledServicesWithContracts(shouldSave = false): boolean {
   let changed = false;
 
-  // 1. همگام‌سازی وضعیت کارهای زمان‌بندی‌شده با جزئیات واقعی قراردادها
-  const updatedServices = scheduledServices.map((s) => {
-    if (!s.contractId) return s;
-    const cd = contractDetailsMap[s.contractId];
-    if (!cd || !cd.months) return s;
-    const targetMonth = s.monthId ? cd.months.find((m) => m.id === s.monthId) : cd.months.find((m) => m.done);
-    if (targetMonth && targetMonth.done) {
-      const normDate = normalizeServiceJalaliDate(targetMonth.date) || s.date;
-      if (s.status !== "done" || s.actualDate !== targetMonth.date || (targetMonth.doneBy && s.technician !== targetMonth.doneBy)) {
-        changed = true;
-        return {
-          ...s,
-          status: "done",
-          actualDate: targetMonth.date || normDate,
-          technician: targetMonth.doneBy || s.technician,
-          report: targetMonth.report || s.report,
-          lastUpdated: Date.now(),
-        };
-      }
+  const monthNumbers: Record<string, number> = {
+    فروردین: 1,
+    اردیبهشت: 2,
+    خرداد: 3,
+    تیر: 4,
+    مرداد: 5,
+    شهریور: 6,
+    مهر: 7,
+    آبان: 8,
+    آذر: 9,
+    دی: 10,
+    بهمن: 11,
+    اسفند: 12,
+  };
+
+  // Map existing scheduled services by:
+  // 1) id
+  // 2) `c${contractId}-m${monthId}`
+  // 3) `no${contractNo}-${normalizedDate}`
+  const existingMap = new Map<string, ScheduledService>();
+  scheduledServices.forEach((s) => {
+    existingMap.set(s.id, s);
+    if (s.contractId !== undefined && s.monthId !== undefined) {
+      existingMap.set(`c${s.contractId}-m${s.monthId}`, s);
     }
-    return s;
+    if (s.contractNo && s.date) {
+      existingMap.set(`no${s.contractNo}-${normalizeServiceJalaliDate(s.date)}`, s);
+    }
   });
 
-  if (changed) {
-    scheduledServices = updatedServices;
-  }
+  const nextList: ScheduledService[] = [];
+  const processedKeys = new Set<string>();
 
-  // 2. درج خودکار خدمات انجام‌شده توسط همکاران در مهرماه یا ماه‌های دیگر در لیست زمان‌بندی
-  const newServices: ScheduledService[] = [];
   contracts.forEach((c) => {
-    const cd = contractDetailsMap[c.id];
-    if (!cd || !cd.months) return;
-    cd.months.forEach((m) => {
-      if (!m.done) return;
-      const exists = scheduledServices.some(
-        (s) => s.contractId === c.id && (s.monthId === m.id || (m.date && s.actualDate === m.date))
-      ) || newServices.some(
-        (s) => s.contractId === c.id && (s.monthId === m.id || (m.date && s.actualDate === m.date))
-      );
-      if (!exists) {
-        const normDate = normalizeServiceJalaliDate(m.date) || "1405/07/06";
-        newServices.push({
-          id: `srv-c${c.id}-m${m.id}`,
-          contractId: c.id,
-          monthId: m.id,
-          date: normDate,
-          actualDate: m.date || normDate,
-          buildingName: c.building,
-          status: "done",
-          technician: m.doneBy || (m.techs && m.techs[0]) || "نامشخص",
-          techCount: (m.techs && m.techs.length) || 1,
-          zone: c.zone || "بدون منطقه",
-          contractNo: c.no,
-          customerName: c.manager,
-          customerPhone: c.phone || "",
-          address: c.address || "",
-          report: m.report,
-          lastUpdated: Date.now(),
-        });
-        changed = true;
-      }
+    const sDay = getContractServiceDay(c.no);
+    const sDayStr = String(sDay).padStart(2, "0");
+    const cd = contractDetailsMap[c.id] || { months: [] };
+    const months = [...(cd.months || [])];
+
+    // Ensure Shahrivar 1405 (1405/06) is present for this contract
+    if (!months.some((m) => m.y === 1405 && (m.m === "شهریور" || m.id === 0))) {
+      const shahrivarPlanned = `1405/06/${sDayStr}`;
+      months.unshift({
+        id: 0,
+        m: "شهریور",
+        y: 1405,
+        plannedDate: shahrivarPlanned,
+        done: false,
+        amount: c.monthlyServiceFee || 0,
+        paid: false,
+        faultsCount: 0,
+        faultsList: [],
+        partsAmount: 0,
+        partsList: [],
+        wage: 0,
+        trip: 0,
+        discount: 0,
+      });
+      changed = true;
+    }
+
+    months.forEach((m) => {
+      const mNum = monthNumbers[m.m] || (m.id === 0 ? 6 : m.id);
+      const defaultPlanned = `${m.y}/${String(mNum).padStart(2, "0")}/${sDayStr}`;
+      const plannedDate = m.plannedDate || defaultPlanned;
+      const normDate = normalizeServiceJalaliDate(m.date || plannedDate);
+      const keyId = `srv-c${c.id}-m${m.id}`;
+
+      processedKeys.add(keyId);
+      processedKeys.add(`c${c.id}-m${m.id}`);
+      processedKeys.add(`no${c.no}-${normDate}`);
+
+      const existing =
+        existingMap.get(keyId) ||
+        existingMap.get(`c${c.id}-m${m.id}`) ||
+        existingMap.get(`no${c.no}-${normDate}`);
+
+      // Sync status:
+      // If either month or existing service is done, treat as done.
+      const isDone = m.done || existing?.status === "done";
+      const tech = m.doneBy || existing?.technician || (m.techs && m.techs[0]) || c.technician || "میثم سهرابی";
+      const report = m.report || existing?.report || "";
+      const actualDate = m.date || existing?.actualDate || (isDone ? normDate : undefined);
+
+      nextList.push({
+        id: existing?.id || keyId,
+        contractId: c.id,
+        monthId: m.id,
+        date: existing?.date ? normalizeServiceJalaliDate(existing.date) : normDate,
+        scheduledDate: plannedDate,
+        actualDate,
+        buildingName: c.building || c.buildingName || `ساختمان ${c.no}`,
+        status: isDone ? "done" : "pending",
+        technician: tech,
+        techCount: (m.techs && m.techs.length) || existing?.techCount || 1,
+        zone: c.zone || "امام سجاد قزوین - البرز",
+        contractNo: String(c.no),
+        customerName: c.manager || c.customer || "مدیر ساختمان",
+        customerPhone: c.phone || c.coordinatorPhone || "",
+        address: c.address || "",
+        report,
+        partsRequested: existing?.partsRequested || [],
+        notes: existing?.notes,
+        lastUpdated: existing?.lastUpdated || Date.now(),
+      });
     });
   });
 
-  if (newServices.length > 0) {
-    scheduledServices = [...scheduledServices, ...newServices];
+  // Preserve any standalone custom scheduled services that don't belong to a contract
+  scheduledServices.forEach((s) => {
+    const key1 = s.id;
+    const key2 = s.contractId !== undefined && s.monthId !== undefined ? `c${s.contractId}-m${s.monthId}` : "";
+    const key3 = s.contractNo && s.date ? `no${s.contractNo}-${normalizeServiceJalaliDate(s.date)}` : "";
+
+    if (!processedKeys.has(key1) && (!key2 || !processedKeys.has(key2)) && (!key3 || !processedKeys.has(key3))) {
+      nextList.push(s);
+    }
+  });
+
+  if (nextList.length > 0) {
+    scheduledServices = nextList;
+    changed = true;
   }
 
   if (changed && shouldSave) {
-    saveStorage("tlift_scheduled_services", scheduledServices);
+    const toSave = scheduledServices.filter(
+      (s) => s.status === "done" || s.report || s.partsRequested?.length || !s.contractId
+    );
+    saveStorage("tlift_scheduled_services", toSave);
   }
+
   return changed;
 }
 
@@ -1939,7 +1999,7 @@ export const appStore = {
     // در صورت تغییر وضعیت، وضعیت ماه مربوطه در جزئیات قرارداد نیز هماهنگ شود
     if (targetService && targetService.contractId) {
       const cid = targetService.contractId;
-      const mid = targetService.monthId || 1;
+      const mid = targetService.monthId !== undefined ? targetService.monthId : 1;
       const details = appStore.getContractDetails(cid);
       if (details?.months) {
         const isDone = targetService.status === "done";
@@ -1958,7 +2018,10 @@ export const appStore = {
       }
     }
 
-    saveStorage("tlift_scheduled_services", scheduledServices);
+    const toSave = scheduledServices.filter(
+      (s) => s.status === "done" || s.report || s.partsRequested?.length || !s.contractId || s.id === id
+    );
+    saveStorage("tlift_scheduled_services", toSave);
     notifyListeners();
   },
   updateScheduledService: (id: string, patch: Partial<ScheduledService>) => {
@@ -1967,35 +2030,104 @@ export const appStore = {
     scheduledServices = scheduledServices.map((s) =>
       s.id === id ? { ...s, ...patch, lastUpdated: Date.now() } : s
     );
-    saveStorage("tlift_scheduled_services", scheduledServices);
+    const toSave = scheduledServices.filter(
+      (s) => s.status === "done" || s.report || s.partsRequested?.length || !s.contractId || s.id === id
+    );
+    saveStorage("tlift_scheduled_services", toSave);
     notifyListeners();
   },
   updateScheduledServiceDate: (id: string, newDate: string) => {
-    scheduledServices = scheduledServices.map((s) =>
-      s.id === id ? { ...s, date: newDate, lastUpdated: Date.now() } : s
+    let target: ScheduledService | undefined;
+    scheduledServices = scheduledServices.map((s) => {
+      if (s.id === id) {
+        target = { ...s, date: newDate, lastUpdated: Date.now() };
+        return target;
+      }
+      return s;
+    });
+    if (target && target.contractId) {
+      const cid = target.contractId;
+      const mid = target.monthId !== undefined ? target.monthId : 1;
+      const details = appStore.getContractDetails(cid);
+      if (details?.months) {
+        const updatedMonths = details.months.map((m) =>
+          m.id === mid ? { ...m, plannedDate: newDate } : m
+        );
+        contractDetailsMap[cid] = { ...details, months: updatedMonths };
+        saveStorage("tlift_contract_details", contractDetailsMap);
+      }
+    }
+    const toSave = scheduledServices.filter(
+      (s) => s.status === "done" || s.report || s.partsRequested?.length || !s.contractId || s.id === id
     );
-    saveStorage("tlift_scheduled_services", scheduledServices);
+    saveStorage("tlift_scheduled_services", toSave);
     notifyListeners();
   },
   updateScheduledServiceTechnician: (id: string, newTech: string) => {
-    scheduledServices = scheduledServices.map((s) =>
-      s.id === id ? { ...s, technician: newTech, lastUpdated: Date.now() } : s
+    let target: ScheduledService | undefined;
+    scheduledServices = scheduledServices.map((s) => {
+      if (s.id === id) {
+        target = { ...s, technician: newTech, lastUpdated: Date.now() };
+        return target;
+      }
+      return s;
+    });
+    if (target && target.contractId) {
+      const cid = target.contractId;
+      const mid = target.monthId !== undefined ? target.monthId : 1;
+      const details = appStore.getContractDetails(cid);
+      if (details?.months) {
+        const updatedMonths = details.months.map((m) =>
+          m.id === mid ? { ...m, doneBy: newTech } : m
+        );
+        contractDetailsMap[cid] = { ...details, months: updatedMonths };
+        saveStorage("tlift_contract_details", contractDetailsMap);
+      }
+    }
+    const toSave = scheduledServices.filter(
+      (s) => s.status === "done" || s.report || s.partsRequested?.length || !s.contractId || s.id === id
     );
-    saveStorage("tlift_scheduled_services", scheduledServices);
+    saveStorage("tlift_scheduled_services", toSave);
     notifyListeners();
   },
   addScheduledServiceReport: (id: string, report: string) => {
-    scheduledServices = scheduledServices.map((s) =>
-      s.id === id
-        ? {
-            ...s,
-            report,
-            status: "done", // Adding a report automatically marks as done
-            lastUpdated: Date.now(),
-          }
-        : s
+    let target: ScheduledService | undefined;
+    scheduledServices = scheduledServices.map((s) => {
+      if (s.id === id) {
+        target = {
+          ...s,
+          report,
+          status: "done", // Adding a report automatically marks as done
+          lastUpdated: Date.now(),
+        };
+        return target;
+      }
+      return s;
+    });
+    if (target && target.contractId) {
+      const cid = target.contractId;
+      const mid = target.monthId !== undefined ? target.monthId : 1;
+      const details = appStore.getContractDetails(cid);
+      if (details?.months) {
+        const updatedMonths = details.months.map((m) =>
+          m.id === mid
+            ? {
+                ...m,
+                report,
+                done: true,
+                date: target?.actualDate || target?.date,
+                doneBy: target?.technician || m.doneBy || "محسن امامی برسری",
+              }
+            : m
+        );
+        contractDetailsMap[cid] = { ...details, months: updatedMonths };
+        saveStorage("tlift_contract_details", contractDetailsMap);
+      }
+    }
+    const toSave = scheduledServices.filter(
+      (s) => s.status === "done" || s.report || s.partsRequested?.length || !s.contractId || s.id === id
     );
-    saveStorage("tlift_scheduled_services", scheduledServices);
+    saveStorage("tlift_scheduled_services", toSave);
     notifyListeners();
   },
   addScheduledServicePartRequest: (
