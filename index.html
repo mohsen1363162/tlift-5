@@ -21,7 +21,28 @@
   </head>
 
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div id="initial-loading-card" style="min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; background-color: #f3f4f6; font-family: Tahoma, system-ui, -apple-system, sans-serif; text-align: center; padding: 20px; direction: rtl;">
+        <div style="width: 56px; height: 56px; border-radius: 16px; background: linear-gradient(135deg, #e11d48, #be123c); display: flex; align-items: center; justify-content: center; color: white; font-size: 24px; font-weight: bold; margin-bottom: 16px; box-shadow: 0 10px 25px -5px rgba(225,29,72,0.3);">آ</div>
+        <div style="width: 28px; height: 28px; border: 3px solid #e2e8f0; border-top-color: #e11d48; border-radius: 50%; animation: spin 0.9s linear infinite; margin-bottom: 12px;"></div>
+        <p style="font-size: 14px; font-weight: bold; color: #1e293b; margin: 0 0 6px 0;">سامانه مدیریت آسانسور آسمان‌سرا</p>
+        <p id="initial-loading-hint" style="font-size: 12px; color: #64748b; margin: 0;">در حال بارگذاری اطلاعات نرم‌افزار...</p>
+        <button id="initial-loading-btn" onclick="location.reload(true)" style="display: none; margin-top: 14px; padding: 8px 18px; font-size: 12px; background: #be123c; color: white; border: none; border-radius: 8px; cursor: pointer; font-family: inherit;">بارگذاری دوباره صفحه</button>
+      </div>
+      <style>
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+      </style>
+      <script>
+        setTimeout(function() {
+          var btn = document.getElementById('initial-loading-btn');
+          var hint = document.getElementById('initial-loading-hint');
+          if (btn && hint) {
+            hint.textContent = 'در صورت طولانی شدن بارگذاری، روی دکمه زیر کلیک کنید:';
+            btn.style.display = 'inline-block';
+          }
+        }, 5000);
+      </script>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
