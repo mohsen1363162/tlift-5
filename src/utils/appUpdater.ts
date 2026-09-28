@@ -2,7 +2,7 @@
  * مدیریت بروزرسانی و آپدیت نرم‌افزار (برنامه آسمانسرا و نسخه دسکتاپ)
  */
 
-export const APP_VERSION = "3.36.9";
+export const APP_VERSION = "3.36.10";
 export const APP_BUILD_DATE = "شهریور ۱۴۰۵";
 
 export interface UpdateCheckResult {

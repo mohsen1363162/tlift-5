@@ -1,5 +1,4 @@
-import { createFullBackup, type FullBackupFile } from "./fullBackup";
-import { pushKey } from "../cloudSync";
+import { createFullBackup, restoreBackupData, type FullBackupFile } from "./fullBackup";
 import { getDeviceToken } from "./deviceAuth";
 
 const DB_NAME = "tlift-device-backups";
@@ -19,9 +18,18 @@ function openDb(): Promise<IDBDatabase> {
 function transaction<T>(mode: IDBTransactionMode, work: (store: IDBObjectStore, done: (value: T) => void, fail: (error: unknown) => void) => void): Promise<T> {
   return openDb().then(db => new Promise<T>((resolve, reject) => {
     const tx = db.transaction(STORE, mode);
-    work(tx.objectStore(STORE), resolve, reject);
-    tx.oncomplete = () => db.close();
-    tx.onerror = () => reject(tx.error);
+    let result: T;
+    tx.oncomplete = () => { db.close(); resolve(result); };
+    tx.onabort = tx.onerror = () => { db.close(); reject(tx.error || new Error("تراکنش بک‌آپ کامل نشد")); };
+    try {
+      work(tx.objectStore(STORE), value => { result = value; }, error => {
+        try { tx.abort(); } catch { /* already aborted */ }
+        reject(error);
+      });
+    } catch (error) {
+      try { tx.abort(); } catch { /* already aborted */ }
+      reject(error);
+    }
   }));
 }
 export async function createDeviceDailyBackup(force = false): Promise<{ created: boolean; date: string }> {
@@ -45,8 +53,7 @@ async function deleteDeviceBackup(date: string) { return transaction<void>("read
 export async function restoreDeviceBackup(date: string) {
   const backup = await getDeviceBackup(date);
   if (!backup) throw new Error("نسخه پشتیبان روی این دستگاه پیدا نشد");
-  Object.entries(backup.entries).forEach(([key, value]) => { localStorage.setItem(key, JSON.stringify(value)); pushKey(key, value); });
-  return Object.keys(backup.entries).length;
+  return restoreBackupData(backup).restored;
 }
 export async function downloadDeviceBackup(date: string) {
   const backup = await getDeviceBackup(date);

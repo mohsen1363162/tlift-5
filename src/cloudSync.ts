@@ -131,6 +131,16 @@ const getInitialManualOffline = (): boolean => {
 
 const queue: Record<string, unknown> = loadQueue();
 const timers: Record<string, ReturnType<typeof setTimeout>> = {};
+const inFlight = new Map<string, Promise<boolean>>();
+
+/** Refresh in-memory state after an atomic local backup restore; never sends data. */
+export function reloadLocalSyncState() {
+  for (const timer of Object.values(timers)) clearTimeout(timer);
+  for (const key of Object.keys(queue)) delete queue[key];
+  Object.assign(queue, loadQueue());
+  setState({ pending: Object.keys(queue).length, offlineServicesCount: getOfflineServices().length,
+    isManualOffline: getInitialManualOffline(), status: "offline" });
+}
 let applyingRemote = false;
 let periodicTimer: ReturnType<typeof setInterval> | null = null;
 export type SyncConflict = { local: unknown; server?: { key?: string; data?: unknown; updated_at?: string }; detectedAt: number };
@@ -360,6 +370,14 @@ async function fetchWithDeviceAuth(endpoint: string, init?: RequestInit) {
   return response;
 }
 
+async function requireSaveAcknowledgement(response: Response, key: string) {
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  const result = await response.json();
+  if (result?.ok !== true || (result.key !== undefined && result.key !== key)) {
+    throw new Error("سرور ذخیره این رکورد را تأیید نکرد؛ داده در صف محفوظ است.");
+  }
+}
+
 async function apiUpsert(key: string, data: unknown, updated_at: string) {
   let lastError: unknown;
   for (const endpoint of syncApiCandidates()) {
@@ -377,16 +395,11 @@ async function apiUpsert(key: string, data: unknown, updated_at: string) {
             body: JSON.stringify({ key, data: merged, updated_at, base_updated_at: conflict.server.updated_at }),
           });
           if (retry.ok) {
-            delete queue[key];
-            saveQueue(queue);
-            forceApplyMerged(key, merged);
-            const meta = loadMeta();
-            meta[key] = conflict.server.updated_at;
-            saveMeta(meta);
+            await requireSaveAcknowledgement(retry, key);
             const conflicts = loadConflicts(); delete conflicts[key];
             localStorage.setItem(CONFLICTS_KEY, JSON.stringify(conflicts));
             setState({ conflicts: Object.keys(conflicts).length, pending: Object.keys(queue).length });
-            return;
+            return merged;
           }
         }
         const conflicts = loadConflicts();
@@ -397,8 +410,8 @@ async function apiUpsert(key: string, data: unknown, updated_at: string) {
         (conflictError as Error & { isConflict?: boolean }).isConflict = true;
         throw conflictError;
       }
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      return;
+      await requireSaveAcknowledgement(res, key);
+      return data;
     } catch (error) { if ((error as Error & { isConflict?: boolean })?.isConflict) throw error; lastError = error; }
   }
   throw new Error(`خطای سرور همگام‌سازی: ${String((lastError as Error)?.message || lastError)}`);
@@ -411,7 +424,8 @@ async function apiSelectPrefix(prefix: string): Promise<{ key: string; data: unk
       const res = await fetchWithDeviceAuth(`${endpoint}?prefix=${encodeURIComponent(prefix)}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const rows = await res.json();
-      return Array.isArray(rows) ? rows : [];
+      if (!Array.isArray(rows)) throw new Error("پاسخ دریافت اطلاعات سرور معتبر نیست.");
+      return rows;
     } catch (error) { lastError = error; }
   }
   throw new Error(`خطای سرور همگام‌سازی: ${String((lastError as Error)?.message || lastError)}`);
@@ -420,7 +434,8 @@ async function apiSelectPrefix(prefix: string): Promise<{ key: string; data: unk
 // ---- push (debounced per key) ----
 export function pushKey(key: string, data: unknown) {
   if (applyingRemote) return; // تغییر از سمت سرور آمده؛ بازتاب نده
-  queue[key] = data;
+  // Snapshot prevents later mutations from changing the payload already in flight.
+  queue[key] = JSON.parse(JSON.stringify(data));
   saveQueue(queue);
   clearTimeout(timers[key]);
   setState({ pending: Object.keys(queue).length });
@@ -434,7 +449,15 @@ export function pushKey(key: string, data: unknown) {
   timers[key] = setTimeout(() => flushKey(key), 800);
 }
 
-async function flushKey(key: string): Promise<boolean> {
+function flushKey(key: string): Promise<boolean> {
+  const active = inFlight.get(key);
+  if (active) return active;
+  const pending = sendQueuedKey(key).finally(() => inFlight.delete(key));
+  inFlight.set(key, pending);
+  return pending;
+}
+
+async function sendQueuedKey(key: string): Promise<boolean> {
   if (state.isManualOffline || (typeof navigator !== "undefined" && !navigator.onLine)) {
     setState({ status: "offline" });
     return false;
@@ -452,10 +475,12 @@ async function flushKey(key: string): Promise<boolean> {
       );
       if (res.error) throw res.error;
     } else {
-      await apiUpsert(key, data, updated_at);
+      const merged = await apiUpsert(key, data, updated_at);
+      if (queue[key] === data && merged !== data) forceApplyMerged(key, merged);
     }
 
-    delete queue[key];
+    // Only acknowledge the exact snapshot sent. A newer edit stays queued.
+    if (queue[key] === data) delete queue[key];
     saveQueue(queue);
 
     const meta = loadMeta();
@@ -470,11 +495,16 @@ async function flushKey(key: string): Promise<boolean> {
       pending: Object.keys(queue).length,
       error: undefined,
     });
+    if (queue[key] !== undefined) {
+      clearTimeout(timers[key]);
+      timers[key] = setTimeout(() => flushKey(key), 800);
+      return false;
+    }
+    clearTimeout(timers[key]);
     return true;
   } catch (e: unknown) {
     console.warn("[cloudSync] flushKey:", e);
-    // در صف نگه‌دار و وضعیت را به آفلاین تغییر بده
-    queue[key] = data;
+    // Keep the current queue snapshot, not the older failed payload.
     saveQueue(queue);
     setState({
       status: "offline",
@@ -502,9 +532,8 @@ export async function flushAll(): Promise<boolean> {
     const ok = await flushKey(k);
     if (!ok) allOk = false;
   }
-  if (allOk) {
-    clearOfflineServices();
-  }
+  allOk = allOk && Object.keys(queue).length === 0;
+  if (allOk) clearOfflineServices();
   return allOk;
 }
 
@@ -667,43 +696,14 @@ export function startRealtime() {
   }
 }
 
-// پاک‌سازی صف‌های قدیمی که در راه‌اندازی اولیه بدون تغییر کاربر در صف مانده‌اند
-function purgeBootstrapFromQueue() {
-  const bootstrapRestored = localStorage.getItem("tlift_bootstrap_restored_v1");
-  if (!bootstrapRestored) return;
-  const meta = loadMeta();
-  let changed = false;
-  const BOOTSTRAP_KEYS = [
-    "tlift_company_access_settings_v1",
-    "tlift_contract_geo_locations_v1",
-    "tlift_customers",
-    "tlift_contracts",
-    "tlift_active_service_assignments_v1",
-    "tlift_contract_ribbon_v2",
-    "tlift_pinned_contracts_v1",
-    "tlift_scheduled_services",
-    "tlift_contract_details",
-  ];
-  for (const k of BOOTSTRAP_KEYS) {
-    if (queue[k] !== undefined && !meta[k]) {
-      delete queue[k];
-      changed = true;
-    }
-  }
-  if (changed) {
-    saveQueue(queue);
-    setState({ pending: Object.keys(queue).length });
-  }
-}
-
 // ---- bootstrap ----
 let started = false;
 export async function startCloudSync() {
   if (started) return;
   started = true;
 
-  // پاک‌سازی صف‌های کاذب حاصل از راه‌اندازی اولیه بوت‌استرپ
-  purgeBootstrapFromQueue();
+  // A bootstrap marker does not prove queued data is disposable.
+  // Preserve all pending edits until the server acknowledges them.
 
   // تداخل‌های نسخه‌های قبلی برای داده‌های قابل‌ادغام، بدون حذف گزارش هیچ سرویس‌کار آماده ارسال می‌شوند.
   prepareStoredConflictMerges();
@@ -765,7 +765,7 @@ export async function syncNow(): Promise<{ success: boolean; message: string }> 
     // دوم: ارسال تغییرات باقیمانده به سرور
     const pushed = await flushAll();
 
-    if (pushed && pulled) {
+    if (pushed && pulled && Object.keys(queue).length === 0) {
       clearOfflineServices();
       const syncedAt = Date.now();
       localStorage.setItem(LAST_SYNC_KEY, String(syncedAt));
@@ -791,8 +791,8 @@ export async function syncNow(): Promise<{ success: boolean; message: string }> 
         error: undefined,
       });
       return {
-        success: true,
-        message: "اطلاعات همکاران با موفقیت دریافت و همگام شد. موارد باقیمانده صف به زودی ارسال می‌شوند.",
+        success: false,
+        message: "اطلاعات همکاران دریافت شد، اما ارسال کامل نشده است. موارد باقیمانده در صف محفوظ هستند.",
       };
     } else {
       setState({ status: navigator.onLine ? "error" : "offline" });

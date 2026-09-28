@@ -27,6 +27,9 @@ def main():
         names = set(archive.namelist())
         check(archive.testzip() is None, "ZIP CRC integrity")
         check(required <= names, "required cPanel files exist")
+        check(not any(n.startswith("tests/") for n in names) and
+              not any(b"__TLIFT_TEST_ISOLATED__" in archive.read(n) for n in names if n.endswith(".js")),
+              "test harness is excluded from production ZIP")
         check(not any(n.lower().endswith((".apk", ".zip", ".tmp")) for n in names), "no APK or nested archives in cPanel ZIP")
         dist = ROOT / "dist"
         expected = {p.relative_to(dist).as_posix() for p in dist.rglob("*") if p.is_file() and not p.name.endswith((".zip", ".tmp"))}

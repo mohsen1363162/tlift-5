@@ -56,7 +56,7 @@ export default function CpanelSettingsPage({
     if (!file) return;
     try {
       const result = await restoreFullBackup(file);
-      setBackupStatus(`${result.restored.toLocaleString("fa-IR")} بخش بازیابی شد؛ در حال همگام‌سازی و بازنشانی برنامه...`);
+      setBackupStatus(`${result.restored.toLocaleString("fa-IR")} بخش بازیابی شد؛ ارسال متوقف است. پس از بررسی اطلاعات، همگام‌سازی را فعال کنید.`);
       setTimeout(() => window.location.reload(), 1800);
     } catch (error) {
       setBackupStatus(error instanceof Error ? error.message : "فایل پشتیبان معتبر نیست.");
