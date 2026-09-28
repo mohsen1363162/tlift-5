@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect } from "react";
 import { X, Search, Wrench, Plus, Trash2, Check, ShoppingBag, Hash, Tag, Layers } from "lucide-react";
-import { partsApi, PartItem } from "../partsStore";
+import { useParts, PartItem } from "../partsStore";
+import { matchesPartSearch } from "../utils/materialCatalog";
 import { detectPriceAnomaly } from "../utils/priceAnomaly";
 
 const fa = (n: string | number) => String(n).replace(/\d/g, (d) => "۰۱۲۳۴۵۶۷۸۹"[+d]);
@@ -36,7 +37,7 @@ export default function PartsManagementModal({
   currentParts = [],
   onDeleteCurrentPart,
 }: PartsManagementModalProps) {
-  const catalog = partsApi.all();
+  const catalog = useParts();
 
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedCatalogId, setSelectedCatalogId] = useState<number | null>(null);
@@ -67,7 +68,7 @@ export default function PartsManagementModal({
     if (!searchQuery.trim()) return catalog.slice(0, 10);
     const q = searchQuery.trim().toLowerCase();
     return catalog.filter(
-      (c) => c.name.toLowerCase().includes(q) || c.code.toLowerCase().includes(q)
+      (c) => matchesPartSearch(c, q)
     );
   }, [catalog, searchQuery]);
 

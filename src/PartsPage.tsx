@@ -4,6 +4,8 @@ import type { Theme } from "./theme";
 import { partsApi, useParts, UNITS } from "./partsStore";
 import { appStore, useStaff, useTechnicianPartDeliveries } from "./store";
 import NumberStepper from "./components/NumberStepper";
+import MaterialCatalogReview from "./components/MaterialCatalogReview";
+import { matchesPartSearch } from "./utils/materialCatalog";
 import { useAuth } from "./contexts/AuthContext";
 import { formatMoneyInput, parseMoneyInput, rialToTomanWords } from "./utils/moneyFormat";
 
@@ -29,7 +31,7 @@ export default function PartsPage({ t }: { t: Theme }) {
   const [bulkReason, setBulkReason] = useState("کنترل هفتگی موجودی توسط مدیر");
   const [editingPart, setEditingPart] = useState<null | { id: number; code: string; name: string; unit: string; price: number; stock: number }>(null);
   const notify = (message: string) => { setToast(message); setTimeout(() => setToast(""), 2500); };
-  const list = useMemo(() => parts.filter((part) => !q.trim() || `${part.name} ${part.code}`.toLowerCase().includes(q.trim().toLowerCase())), [parts, q]);
+  const list = useMemo(() => parts.filter((part) => matchesPartSearch(part, q)), [parts, q]);
   const selectedPart = parts.find((part) => part.id === selectedPartId);
   const selectedStaff = staff.find((person) => person.id === selectedStaffId);
   const selectedDelivery = deliveries.find(d => d.id === selectedDeliveryId);
@@ -74,6 +76,8 @@ export default function PartsPage({ t }: { t: Theme }) {
     setModal(null); setQuantity(1); setNote(""); notify("قطعه تحویل شد و از موجودی انبار کسر گردید");
   };
   return <div className="relative flex h-full min-h-0 flex-col p-4">
+    <MaterialCatalogReview t={t} canImport={currentUserInfo?.role === "admin"}/>
+
     <div className="mb-4 flex flex-wrap items-center gap-2"><div className={`flex h-10 min-w-60 flex-1 items-center rounded-xl border px-3 ${t.input} ${t.border}`}><input value={q} onChange={(e) => setQ(e.target.value)} placeholder="جستجوی نام یا کد کالا..." className="w-full bg-transparent text-sm outline-none"/></div><button onClick={() => setModal("stock")} className="rounded-xl bg-emerald-600 px-4 py-2.5 text-xs font-bold text-white"><Plus size={15} className="ml-1 inline"/> افزایش موجودی</button><button onClick={() => {setStockQuantity(selectedPart?.stock||0);setModal("mainReconcile")}} className="rounded-xl border border-amber-500 px-4 py-2.5 text-xs font-bold text-amber-600"><ClipboardCheck size={15} className="ml-1 inline"/> انبارگردانی اصلی</button>{isOwner&&<button onClick={openBulkEdit} className="rounded-xl bg-slate-700 px-4 py-2.5 text-xs font-bold text-white"><ClipboardCheck size={15} className="ml-1 inline"/> ویرایش گروهی تعدادها</button>}<button onClick={() => setModal("delivery")} className="rounded-xl bg-blue-600 px-4 py-2.5 text-xs font-bold text-white"><Truck size={15} className="ml-1 inline"/> تحویل به سرویس‌کار</button><button onClick={() => setModal("part")} className="rounded-xl bg-violet-600 px-4 py-2.5 text-xs font-bold text-white"><Package size={15} className="ml-1 inline"/> تعریف کالا</button></div>
     <div className="grid min-h-0 flex-1 gap-4 xl:grid-cols-[1fr_390px]">
       <div className={`overflow-auto rounded-xl border ${t.border}`}><table className="w-full text-xs"><thead className={t.head}><tr>{["کد","نام کالا","واحد","موجودی انبار","قیمت واحد","عملیات"].map(x=><th key={x} className="p-3 text-right">{x}</th>)}</tr></thead><tbody>{list.map(part=><tr key={part.id} className={`border-t ${t.border}`}><td className="p-3 text-violet-500">{part.code}</td><td className={`p-3 font-bold ${t.text}`}>{part.name}</td><td className={`p-3 ${t.sub}`}>{part.unit}</td><td className={`p-3 text-lg font-black ${part.stock <= (part.minimumStock || 0) ? "text-red-500" : "text-emerald-500"}`}>{part.stock.toLocaleString("fa-IR")}</td><td className={`p-3 ${t.text}`}>{part.price.toLocaleString("fa-IR")} ریال</td><td className="p-3">{isOwner?<button onClick={()=>setEditingPart({id:part.id,code:part.code,name:part.name,unit:part.unit,price:part.price,stock:part.stock})} className="inline-flex items-center gap-1 rounded-lg border border-blue-400 px-3 py-2 text-[10px] font-bold text-blue-600"><Pencil size={13}/>ویرایش عدد و قیمت</button>:<span className={t.sub}>—</span>}</td></tr>)}</tbody></table></div>

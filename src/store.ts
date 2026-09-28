@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import { sameReviewedMaterial, normalizeMaterialText } from "./utils/materialCatalog";
 import { pushKey, registerApplier, syncNow, recordOfflineService, getSyncState } from "./cloudSync";
 import { Contract, Customer, Staff, initialContracts, initialCustomers, initialStaff } from "./data";
 import type { BuildingCsvRow } from "./utils/buildingsCsv";
@@ -1946,7 +1947,10 @@ export const appStore = {
     usedParts.forEach((used) => {
       let needed = Number(used.qty || 0);
       technicianPartDeliveries = technicianPartDeliveries.map((delivery) => {
-        if (needed <= 0 || delivery.technicianName !== technicianName || delivery.status !== "active" || (delivery.partName !== used.name && delivery.partCode !== used.code)) return delivery;
+        const unitsDiffer = delivery.unit && used.unit && normalizeMaterialText(delivery.unit) !== normalizeMaterialText(used.unit);
+        const samePart = delivery.partName === used.name || (used.code && delivery.partCode === used.code) ||
+          sameReviewedMaterial({ name: delivery.partName, code: delivery.partCode, unit: delivery.unit }, used);
+        if (needed <= 0 || delivery.technicianName !== technicianName || delivery.status !== "active" || unitsDiffer || !samePart) return delivery;
         const take = Math.min(needed, delivery.remainingQuantity);
         needed -= take;
         const remainingQuantity = delivery.remainingQuantity - take;

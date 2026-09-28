@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from "react";
 import { pushKey, registerApplier } from "./cloudSync";
 import { recordAudit } from "./auditLog";
+import { planMaterialImport } from "./utils/materialCatalog";
 
 export type PartItem = {
   id: number;
@@ -15,6 +16,10 @@ export type PartItem = {
   price: number;
   stock: number;
   minimumStock?: number;
+  /** Compatible catalogue migration: archived IDs stay available to old deliveries. */
+  mergedInto?: number;
+  catalogAliases?: string[];
+  catalogRevision?: string;
 };
 
 const seed: [string, string, string, number][] = [
@@ -39,7 +44,7 @@ function loadParts(): PartItem[] {
   } catch (e) {
     console.warn("Error reading tlift_parts", e);
   }
-  return seed.map(([code, name, unit, price], i) => ({
+  return planMaterialImport(seed.map(([code, name, unit, price], i) => ({
     id: i + 1,
     code,
     name,
@@ -52,7 +57,7 @@ function loadParts(): PartItem[] {
     price,
     stock: 0,
     minimumStock: 0,
-  }));
+  }))).records;
 }
 
 function saveParts(data: PartItem[]) {
@@ -64,24 +69,64 @@ function saveParts(data: PartItem[]) {
 }
 
 let parts: PartItem[] = loadParts();
+let visibleParts = parts.filter(item => !item.mergedInto);
+const refreshVisible = () => { visibleParts = parts.filter(item => !item.mergedInto); };
 
 const listeners = new Set<() => void>();
 const emit = () => {
   saveParts(parts);
   pushKey("tlift_parts", parts);
+  refreshVisible();
   listeners.forEach((l) => l());
 };
 registerApplier((key, data) => {
   if (key !== "tlift_parts" || !Array.isArray(data)) return;
   parts = (data as PartItem[]).map((item) => ({ ...item, stock: Number(item.stock || 0) }));
   saveParts(parts);
+  refreshVisible();
   listeners.forEach((listener) => listener());
 });
 
 export const partsApi = {
-  all: () => parts,
+  all: () => visibleParts,
+  previewMaterialImport: () => planMaterialImport(parts),
+  applyMaterialImport: () => {
+    const plan = planMaterialImport(parts);
+    if (!plan.added && !plan.updated && !plan.archived) return plan;
+    // Write the complete pre-import snapshot first. A quota failure must not
+    // change the current list, queue, IDs or inventory.
+    const backupKey = "tlift_parts_before_material_catalog_v1__backup";
+    if (localStorage.getItem(backupKey) === null) localStorage.setItem(backupKey, JSON.stringify(parts));
+    const previousRaw = localStorage.getItem("tlift_parts");
+    const pending = JSON.parse(localStorage.getItem("tlift_offline_queue_v2") || "{}");
+    if (!pending || Array.isArray(pending) || typeof pending !== "object") throw new Error("صف فعلی دستگاه معتبر نیست؛ فهرست تغییر نکرد.");
+    // Reserve space for both the catalog and its offline upload before committing
+    // the in-memory list. Storage.setItem is atomic per key, not across keys.
+    let wroteParts = false;
+    try {
+      localStorage.setItem("tlift_parts", JSON.stringify(plan.records));
+      wroteParts = true;
+      localStorage.setItem("tlift_offline_queue_v2", JSON.stringify({ ...pending, tlift_parts: plan.records }));
+    } catch (error) {
+      if (wroteParts) {
+        if (previousRaw === null) localStorage.removeItem("tlift_parts");
+        else localStorage.setItem("tlift_parts", previousRaw);
+      }
+      throw error;
+    }
+    parts = plan.records;
+    pushKey("tlift_parts", parts);
+    refreshVisible();
+    listeners.forEach(listener => listener());
+    try {
+      recordAudit({ action: "اعمال فهرست بازبینی‌شده قطعات", entityType: "part", entityId: "material-catalog",
+        title: `${plan.added} جدید، ${plan.updated} به‌روزرسانی، ${plan.archived} ادغام`,
+        after: { added: plan.added, updated: plan.updated, archived: plan.archived, warnings: plan.warnings, backupKey } });
+    } catch { plan.warnings.push("فهرست ذخیره شد؛ ثبت گزارش حسابرسی به علت محدودیت حافظه انجام نشد."); }
+    return plan;
+  },
   add: (p: Omit<PartItem, "id">) => {
-    parts = [{ ...p, id: parts.length + 1 }, ...parts];
+    parts = [{ ...p, id: Math.max(0, ...parts.map(item => item.id)) + 1 }, ...parts];
     emit();
   },
   update: (p: PartItem) => {
@@ -95,9 +140,15 @@ export const partsApi = {
     emit();
   },
   adjustStock: (id: number, delta: number) => {
-    const target = parts.find((item) => item.id === id);
+    let target = parts.find((item) => item.id === id);
+    const visited = new Set<number>();
+    while (target?.mergedInto) {
+      if (visited.has(target.id)) return false;
+      visited.add(target.id);
+      target = parts.find(item => item.id === target!.mergedInto);
+    }
     if (!target || target.stock + delta < 0) return false;
-    parts = parts.map((item) => item.id === id ? { ...item, stock: item.stock + delta } : item);
+    parts = parts.map((item) => item.id === target.id ? { ...item, stock: item.stock + delta } : item);
     emit();
     return true;
   },
@@ -109,7 +160,7 @@ export function useParts() {
       listeners.add(cb);
       return () => listeners.delete(cb);
     },
-    () => parts
+    () => visibleParts
   );
 }
 

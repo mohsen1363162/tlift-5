@@ -4,11 +4,11 @@ if (!(window as any).__TLIFT_TEST_ISOLATED__) {
   document.getElementById('root')!.textContent = 'این صفحه فقط توسط آزمون ایزوله اجرا می‌شود.';
 } else {
   void (async () => {
-    const [sync, backup, daily, store] = await Promise.all([
+    const [sync, backup, daily, store, parts] = await Promise.all([
       import('../../src/cloudSync'), import('../../src/utils/fullBackup'),
-      import('../../src/utils/dailyBackups'), import('../../src/store'),
+      import('../../src/utils/dailyBackups'), import('../../src/store'), import('../../src/partsStore'),
     ]);
-    Object.assign(window, { testApi: { sync, backup, daily, appStore: store.appStore } });
+    Object.assign(window, { testApi: { sync, backup, daily, appStore: store.appStore, partsApi: parts.partsApi } });
     await import('../../src/main');
   })();
 }

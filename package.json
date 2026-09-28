@@ -1,7 +1,7 @@
 {
   "name": "vite_react_shadcn_ts",
   "private": true,
-  "version": "3.36.10",
+  "version": "3.36.11",
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0 --port 3000",
@@ -12,7 +12,8 @@
     "typecheck": "tsc -p tsconfig.app.json --noEmit",
     "test:smoke": "playwright test smoke.spec.ts",
     "test:recovery": "playwright test offline-recovery.spec.ts",
-    "test:recovery:build": "vite build --config tests/harness/vite.config.ts"
+    "test:recovery:build": "vite build --config tests/harness/vite.config.ts",
+    "test:materials": "node --test tests/unit/material-catalog.test.mjs && playwright test material-catalog.spec.ts"
   },
   "dependencies": {
     "@capacitor/android": "^8.5.2",
