@@ -277,19 +277,6 @@ async function restoreBootstrapWhenEmpty() {
     return false;
   }
 }
-void restoreBootstrapWhenEmpty().then((restored) => {
-  if (!restored) return;
-  // بازیابی اولیه بدون reload انجام می‌شود تا کاربر وسط فرم ثبت قرارداد به صفحه خانه برنگردد.
-  contracts = loadStorage<Contract[]>("tlift_contracts", contracts);
-  customers = loadStorage<Customer[]>("tlift_customers", customers);
-  const restoredDetails = loadStorage<Record<number, ContractDetails>>("tlift_contract_details", contractDetailsMap);
-  Object.assign(contractDetailsMap, restoredDetails);
-  reconcileScheduledServicesWithContracts(false);
-  notifyListeners();
-  if (typeof navigator !== "undefined" && navigator.onLine) {
-    void syncNow().catch(() => {});
-  }
-});
 
 // اعمال مبالغ واقعی و مصوب قراردادها از لیست رسمی مدیریت به حافظه مرورگر
 function syncOfficialContractFees() {
@@ -820,6 +807,65 @@ let zones: ZoneItem[] = loadStorage<ZoneItem[]>("tlift_zones_v2", INITIAL_ZONES)
 let checklistItems: ChecklistItem[] = loadStorage<ChecklistItem[]>("tlift_checklist_v1", INITIAL_CHECKLIST);
 let checklistCategories: string[] = loadStorage<string[]>("tlift_checklist_categories_v1", INITIAL_CHECKLIST_CATEGORIES);
 
+const initialContractDetails: Record<number, ContractDetails> = {
+  1: {
+    months: [
+      {
+        id: 1,
+        m: "خرداد",
+        y: 1405,
+        done: true,
+        date: "1405/03/25",
+        amount: 8500000,
+        paid: true,
+        paidDate: "1405/03/26",
+        paidMethod: "کارت به کارت",
+        paidRef: "TRX-89301",
+      },
+      { id: 2, m: "تیر", y: 1405, done: false, amount: 8500000, paid: false },
+      { id: 3, m: "مرداد", y: 1405, done: false, amount: 8500000, paid: false },
+      { id: 4, m: "شهریور", y: 1405, done: false, amount: 8500000, paid: false },
+      { id: 5, m: "مهر", y: 1405, done: false, amount: 8500000, paid: false },
+      { id: 6, m: "آبان", y: 1405, done: false, amount: 8500000, paid: false },
+      { id: 7, m: "آذر", y: 1405, done: false, amount: 8500000, paid: false },
+      { id: 8, m: "دی", y: 1405, done: false, amount: 8500000, paid: false },
+      { id: 9, m: "بهمن", y: 1405, done: false, amount: 8500000, paid: false },
+      { id: 10, m: "اسفند", y: 1405, done: false, amount: 8500000, paid: false },
+      { id: 11, m: "فروردین", y: 1406, done: false, amount: 8500000, paid: false },
+      { id: 12, m: "اردیبهشت", y: 1406, done: false, amount: 8500000, paid: false },
+    ],
+    payments: [
+      {
+        id: 1,
+        title: "پیش‌پرداخت اولیه قرارداد",
+        date: "1405/03/01",
+        amount: 8500000,
+        method: "کارت به کارت",
+        ref: "TRX-89301",
+        monthId: 1,
+      },
+    ],
+    invoices: [],
+  },
+};
+
+const contractDetailsMap: Record<number, ContractDetails> = loadStorage<Record<number, ContractDetails>>(
+  "tlift_contract_details",
+  initialContractDetails
+);
+
+// Event Listeners for reactivity
+const listeners = new Set<() => void>();
+const notifyListeners = () => {
+  listeners.forEach((listener) => {
+    try {
+      listener();
+    } catch (e) {
+      console.error(e);
+    }
+  });
+};
+
 export function normalizeServiceJalaliDate(val?: string): string {
   if (!val) return "";
   const eng = String(val).replace(/[۰-۹]/g, (d) => String("۰۱۲۳۴۵۶۷۸۹".indexOf(d))).trim();
@@ -911,6 +957,20 @@ export function reconcileScheduledServicesWithContracts(shouldSave = false): boo
 // تطبیق اولیه بلافاصله در زمان بارگذاری فایل
 reconcileScheduledServicesWithContracts(false);
 
+// بازیابی اولیه بدون reload انجام می‌شود تا کاربر وسط فرم ثبت قرارداد به صفحه خانه برنگردد.
+void restoreBootstrapWhenEmpty().then((restored) => {
+  if (!restored) return;
+  contracts = loadStorage<Contract[]>("tlift_contracts", contracts);
+  customers = loadStorage<Customer[]>("tlift_customers", customers);
+  const restoredDetails = loadStorage<Record<number, ContractDetails>>("tlift_contract_details", contractDetailsMap);
+  Object.assign(contractDetailsMap, restoredDetails);
+  reconcileScheduledServicesWithContracts(false);
+  notifyListeners();
+  if (typeof navigator !== "undefined" && navigator.onLine) {
+    void syncNow().catch(() => {});
+  }
+});
+
 // Auto-seed CSV contracts if only default demo contracts are present
 // داده نمونه هرگز خودکار وارد نمی‌شود؛ ورود اطلاعات فقط با اقدام صریح مدیر انجام می‌شود.
 const isCsvSeeded = true;
@@ -966,62 +1026,6 @@ if (!isCustCsvSeeded) {
     console.error("Error auto-seeding CSV customers", e);
   }
 }
-const contractDetailsMap: Record<number, ContractDetails> = loadStorage<Record<number, ContractDetails>>(
-  "tlift_contract_details",
-  {
-    1: {
-      months: [
-        {
-          id: 1,
-          m: "خرداد",
-          y: 1405,
-          done: true,
-          date: "1405/03/25",
-          amount: 8500000,
-          paid: true,
-          paidDate: "1405/03/26",
-          paidMethod: "کارت به کارت",
-          paidRef: "TRX-89301",
-        },
-        { id: 2, m: "تیر", y: 1405, done: false, amount: 8500000, paid: false },
-        { id: 3, m: "مرداد", y: 1405, done: false, amount: 8500000, paid: false },
-        { id: 4, m: "شهریور", y: 1405, done: false, amount: 8500000, paid: false },
-        { id: 5, m: "مهر", y: 1405, done: false, amount: 8500000, paid: false },
-        { id: 6, m: "آبان", y: 1405, done: false, amount: 8500000, paid: false },
-        { id: 7, m: "آذر", y: 1405, done: false, amount: 8500000, paid: false },
-        { id: 8, m: "دی", y: 1405, done: false, amount: 8500000, paid: false },
-        { id: 9, m: "بهمن", y: 1405, done: false, amount: 8500000, paid: false },
-        { id: 10, m: "اسفند", y: 1405, done: false, amount: 8500000, paid: false },
-        { id: 11, m: "فروردین", y: 1406, done: false, amount: 8500000, paid: false },
-        { id: 12, m: "اردیبهشت", y: 1406, done: false, amount: 8500000, paid: false },
-      ],
-      payments: [
-        {
-          id: 1,
-          title: "پیش‌پرداخت اولیه قرارداد",
-          date: "1405/03/01",
-          amount: 8500000,
-          method: "کارت به کارت",
-          ref: "TRX-89301",
-          monthId: 1,
-        },
-      ],
-      invoices: [],
-    },
-  }
-);
-
-// Event Listeners for reactivity
-const listeners = new Set<() => void>();
-const notifyListeners = () => {
-  listeners.forEach((listener) => {
-    try {
-      listener();
-    } catch (e) {
-      console.error(e);
-    }
-  });
-};
 
 // اعمال داده‌های دریافتی از سرور (Supabase) روی state محلی
 registerApplier((key, data) => {
