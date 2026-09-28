@@ -1,0 +1,10 @@
+const ones = ["صفر","یک","دو","سه","چهار","پنج","شش","هفت","هشت","نه","ده","یازده","دوازده","سیزده","چهارده","پانزده","شانزده","هفده","هجده","نوزده"];
+const tens = ["","","بیست","سی","چهل","پنجاه","شصت","هفتاد","هشتاد","نود"];
+const hundreds = ["","صد","دویست","سیصد","چهارصد","پانصد","ششصد","هفتصد","هشتصد","نهصد"];
+const scales = ["","هزار","میلیون","میلیارد","تریلیون"];
+const faDigits = "۰۱۲۳۴۵۶۷۸۹";
+export const parseMoneyInput = (value: string) => Number(value.replace(/[۰-۹]/g,d=>String(faDigits.indexOf(d))).replace(/\D/g,"")) || 0;
+export const formatMoneyInput = (value: number) => value ? value.toLocaleString("en-US") : "";
+const under1000 = (n:number) => { const out:string[]=[]; if(n>=100){out.push(hundreds[Math.floor(n/100)]);n%=100;} if(n>=20){out.push(tens[Math.floor(n/10)]);if(n%10)out.push(ones[n%10]);}else if(n)out.push(ones[n]); return out.join(" و "); };
+export const numberToPersianWords = (value:number) => { let n=Math.floor(Math.abs(value)); if(!n)return "صفر";const out:string[]=[];let scale=0;while(n>0&&scale<scales.length){const chunk=n%1000;if(chunk)out.unshift(`${under1000(chunk)}${scales[scale]?` ${scales[scale]}`:""}`);n=Math.floor(n/1000);scale++;}return out.join(" و "); };
+export const rialToTomanWords = (rial:number) => `${numberToPersianWords(Math.floor(rial/10))} تومان`;
