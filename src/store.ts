@@ -21,6 +21,8 @@ export type ServicePartItem = {
   name: string;
   unit: string;
   qty: number;
+  /** Legacy imported quantity; new records continue to use qty. */
+  quantity?: number;
   price: number;
 };
 
@@ -1328,7 +1330,7 @@ export const appStore = {
     const details = appStore.getContractDetails(renewed.id);
     const yearMatch = renewed.start?.match(/(\d{4})/);
     const year = yearMatch ? Number(yearMatch[1]) : 1405;
-    const amount = renewed.monthlyServiceFee || details.months.at(-1)?.amount || 0;
+    const amount = renewed.monthlyServiceFee || details.months[details.months.length - 1]?.amount || 0;
     const maxId = details.months.reduce((max, month) => Math.max(max, month.id), 0);
     const newPeriod = generateInitialMonths(year, amount).map((month, index) => ({ ...month, id: maxId + index + 1, done: false, date: undefined, inTime: undefined, outTime: undefined, paid: false, paidDate: undefined, paidMethod: undefined, paidRef: undefined, doneBy: undefined, techs: undefined, report: undefined, faultsCount: 0, faultsList: [], partsAmount: 0, partsList: [], wage: 0 }));
     contractDetailsMap[renewed.id] = { ...details, months: [...details.months, ...newPeriod] };

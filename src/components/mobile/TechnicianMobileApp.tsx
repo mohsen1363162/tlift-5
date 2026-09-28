@@ -397,7 +397,7 @@ export default function TechnicianMobileApp({
   const [dispatchSelected, setDispatchSelected] = useState<string[]>([]);
   const [dispatchTechnician, setDispatchTechnician] = useState("مجتبی فرهمند");
   const [dispatchDate, setDispatchDate] = useState(currentJalaliDate);
-  const [expandedContractId, setExpandedContractId] = useState<string | null>(null);
+  const [expandedContractId, setExpandedContractId] = useState<number | null>(null);
   const dispatchCandidates = useMemo(() => jobs.filter((job, index, all) => !job.month.done && all.findIndex((candidate) => candidate.contract.id === job.contract.id && !candidate.month.done) === index), [jobs]);
   const dispatchZones = useMemo(() => Array.from(new Set(contracts.map((contract) => contract.zone || "بدون منطقه"))).sort(), [contracts]);
   const visibleDispatchCandidates = dispatchCandidates.filter((job) => {
@@ -421,7 +421,7 @@ export default function TechnicianMobileApp({
   const [isLocatingUser, setIsLocatingUser] = useState(false);
   const [showOsmBase, setShowOsmBase] = useState(true);
   const [isSimulatedArrival, setIsSimulatedArrival] = useState(false);
-  const dailyRoute = useMemo(() => planDailyRoute(myDailyAssignments.map(service => { const contract=contracts.find(item=>item.id===service.contractId||item.contractNo===service.contractNo); const geo=contractGeoLocations.find(item=>item.contractId===contract?.id); return { id:service.id, contractId:contract?.id, name:service.buildingName, address:service.address||contract?.address, zone:service.zone||contract?.zone, latitude:geo?.latitude, longitude:geo?.longitude }; }), userGps ? {latitude:userGps.lat,longitude:userGps.lng} : undefined), [myDailyAssignments,contracts,contractGeoLocations,userGps]);
+  const dailyRoute = useMemo(() => planDailyRoute(myDailyAssignments.map(service => { const contract=contracts.find(item=>item.id===service.contractId||(!!service.contractNo && (item.no===service.contractNo||item.contractNo===service.contractNo))); const geo=contractGeoLocations.find(item=>item.contractId===contract?.id); return { id:service.id, contractId:contract?.id, name:service.buildingName, address:service.address||contract?.address, zone:service.zone||contract?.zone, latitude:geo?.latitude, longitude:geo?.longitude }; }), userGps ? {latitude:userGps.lat,longitude:userGps.lng} : undefined), [myDailyAssignments,contracts,contractGeoLocations,userGps]);
   const openDailyRoute = () => { const url=mapsRouteUrl(dailyRoute,userGps?{latitude:userGps.lat,longitude:userGps.lng}:undefined); if(!url)return notify("برای نمایش مسیر، موقعیت ساختمان‌ها باید ثبت شود"); window.open(url,"_blank","noopener,noreferrer"); };
   const [hasAnnouncedArrival, setHasAnnouncedArrival] = useState(false);
 
@@ -2434,9 +2434,9 @@ export default function TechnicianMobileApp({
         c.address || "",
         c.phone || "",
         c.coordinatorPhone || "",
-        c.elevatorType || "",
-        `${c.stops || ""} توقف`,
-        `${c.floors || ""} طبقه`,
+        c.devices?.[0]?.type || c.elevatorType || "",
+        `${c.devices?.[0]?.stops || c.stops || ""} توقف`,
+        `${c.devices?.[0]?.floors || c.floors || ""} طبقه`,
       ];
       if (searchableFields.some((f) => matchSmart(f, q))) return true;
       const combined = searchableFields.join(" ");
@@ -2457,7 +2457,7 @@ export default function TechnicianMobileApp({
       // سرویس منتخب برای شروع: اولویت قطعی با ماه گذشته که انجام نشده، یا اولین ماه انجام‌نشده
       const targetMonth = (hasLastMonthPending && lastMonthService)
         ? lastMonthService
-        : (pendingMonths[0] || months[months.length - 1] || { id: "m1", m: previousMonthInfo.monthName, y: previousMonthInfo.year, amount: 0, done: false });
+        : (pendingMonths[0] || months[months.length - 1] || { id: 1, m: previousMonthInfo.monthName, y: previousMonthInfo.year, amount: 0, done: false, paid: false });
       const targetJob: Job = { contract: c, month: targetMonth, overdue: hasLastMonthPending };
       const isAllDone = !hasLastMonthPending;
       return {
@@ -2597,8 +2597,8 @@ export default function TechnicianMobileApp({
                             <span>{c.coordinatorPhone || c.phone}</span>
                           </a>
                         )}
-                        {c.elevatorType && (
-                          <span className="text-gray-400">· {c.elevatorType}</span>
+                        {(c.devices?.[0]?.type || c.elevatorType) && (
+                          <span className="text-gray-400">· {c.devices?.[0]?.type || c.elevatorType}</span>
                         )}
                       </div>
                     </div>
@@ -2750,7 +2750,7 @@ export default function TechnicianMobileApp({
       const pendingCount = isLastMonthPending ? 1 : 0;
       const nextMonth = (isLastMonthPending && lastMonthService)
         ? lastMonthService
-        : (months.find((m) => !m.done) || months[0] || { id: "m1", m: previousMonthInfo.monthName, y: previousMonthInfo.year, amount: 0, done: false });
+        : (months.find((m) => !m.done) || months[0] || { id: 1, m: previousMonthInfo.monthName, y: previousMonthInfo.year, amount: 0, done: false, paid: false });
       const targetJob: Job = { contract: c, month: nextMonth, overdue: isLastMonthPending };
       const distM = userGps ? Math.round(distanceMeters(userGps.lat, userGps.lng, coords.lat, coords.lng)) : null;
       const activeAssignment = activeServiceAssignments.find((a) => a.contractId === c.id);
@@ -3235,7 +3235,7 @@ export default function TechnicianMobileApp({
                 <div className="font-bold text-[13px] text-gray-800">{contract.building.replace(/^\*\s*/, "")}</div>
                 <div className="mt-1 text-[10.5px] text-gray-500">{contract.manager} · قرارداد {contract.no}</div>
                 <div className={`mt-2 rounded-xl border p-3 text-[12px] ${contract.triangleKeyLocation ? "border-red-100 bg-red-50 text-gray-800" : "border-dashed text-gray-400"}`}><span className="font-bold text-red-500">محل کلید: </span>{contract.triangleKeyLocation || "ثبت نشده"}</div>
-                <div className="mt-2 grid grid-cols-2 gap-2"><div className="rounded-xl border border-amber-100 bg-amber-50 p-2 text-[10.5px]"><b className="block text-amber-700">آخرین نظافت</b>{contract.cleaningDates?.at(-1) || "ثبت نشده"}</div><div className="rounded-xl border border-blue-100 bg-blue-50 p-2 text-[10.5px]"><b className="block text-blue-700">آخرین تعویض روغن موتور</b>{contract.motorOilChangeDates?.at(-1) || "ثبت نشده"}</div></div>
+                <div className="mt-2 grid grid-cols-2 gap-2"><div className="rounded-xl border border-amber-100 bg-amber-50 p-2 text-[10.5px]"><b className="block text-amber-700">آخرین نظافت</b>{contract.cleaningDates?.slice(-1)[0] || "ثبت نشده"}</div><div className="rounded-xl border border-blue-100 bg-blue-50 p-2 text-[10.5px]"><b className="block text-blue-700">آخرین تعویض روغن موتور</b>{contract.motorOilChangeDates?.slice(-1)[0] || "ثبت نشده"}</div></div>
                 <button type="button" onClick={() => { setTriangleKeyEditing(contract); setTriangleKeyLocation(contract.triangleKeyLocation || ""); setTriangleCleaningDates([...(contract.cleaningDates || [])]); setTriangleOilDates([...(contract.motorOilChangeDates || [])]); setTriangleNewCleaning(""); setTriangleNewOil(""); }} className="mt-2 w-full rounded-xl bg-blue-600 py-2.5 text-[12px] font-bold text-white">{contract.triangleKeyLocation ? "ویرایش محل کلید" : "ثبت محل کلید"}</button>
               </div>)}
               {matches.length === 0 && <div className="py-10 text-center text-[12px] text-gray-400">ساختمانی پیدا نشد</div>}
@@ -3293,7 +3293,7 @@ export default function TechnicianMobileApp({
   );
 
   const renderMyAssignedJobsView = () => (
-    <>{header("کارهای واگذارشده من", () => setScreen("home"))}<div className="p-3 pb-24">{!!dailyRoute.length&&<div className="mb-3 rounded-2xl border border-blue-200 bg-blue-50 p-3"><div className="flex items-center justify-between"><div><b className="text-xs text-blue-900">مسیر پیشنهادی امروز</b><div className="mt-1 text-[10px] text-blue-700">بر اساس نزدیک‌ترین ساختمان‌ها و ترتیب منطقه‌ها</div></div><Compass className="text-blue-600" size={22}/></div><div className="mt-3 grid grid-cols-2 gap-2"><button onClick={()=>{if(!navigator.geolocation)return notify("GPS در دسترس نیست");navigator.geolocation.getCurrentPosition(p=>setUserGps({lat:p.coords.latitude,lng:p.coords.longitude,accuracy:p.coords.accuracy}),()=>notify("موقعیت فعلی دریافت نشد"),{enableHighAccuracy:true,timeout:10000})}} className="rounded-xl border border-blue-300 bg-white py-2.5 text-[11px] font-bold text-blue-700"><Locate size={14} className="ml-1 inline"/>شروع از موقعیت من</button><button onClick={openDailyRoute} className="rounded-xl bg-blue-600 py-2.5 text-[11px] font-bold text-white"><ExternalLink size={14} className="ml-1 inline"/>نمایش مسیر روی نقشه</button></div><div className="mt-2 text-[9px] text-blue-600">{dailyRoute.filter(x=>x.hasLocation).length.toLocaleString("fa-IR")} موقعیت ثبت‌شده · {dailyRoute.filter(x=>!x.hasLocation).length.toLocaleString("fa-IR")} بدون موقعیت</div></div>}<div className="space-y-2">{dailyRoute.map(stop=>{const service=myDailyAssignments.find(item=>item.id===stop.id)!;const contract=contracts.find(item=>item.id===service.contractId||item.contractNo===service.contractNo);const job=contract?jobs.find(item=>item.contract.id===contract.id&&(!service.monthId||item.month.id===service.monthId)):undefined;return <button key={service.id} onClick={()=>{if(job){setSelected(job);setScreen("job")}}} className="w-full rounded-2xl border bg-white p-3 text-right shadow-sm"><div className="flex items-start gap-3"><span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-black ${stop.hasLocation?"bg-blue-600 text-white":"bg-gray-200 text-gray-600"}`}>{stop.order.toLocaleString("fa-IR")}</span><div className="min-w-0 flex-1"><div className="flex items-center justify-between"><b className="text-[13px] text-gray-800">{service.buildingName}</b><span className="rounded-full bg-blue-50 px-2 py-1 text-[9px] text-blue-700">{service.date}</span></div><div className="mt-1 text-[10px] text-gray-500">{service.zone} · {service.customerName}</div><div className="mt-2 text-[10.5px] leading-5 text-gray-600">{service.address||"آدرس ثبت نشده"}</div><div className="mt-2 flex justify-between text-[9px]"><span className={stop.hasLocation?"text-emerald-600":"text-amber-600"}>{stop.hasLocation?"موقعیت ثبت شده":"نیازمند ثبت موقعیت"}</span>{stop.distanceFromPreviousKm!=null&&<span className="text-blue-600">فاصله تقریبی {stop.distanceFromPreviousKm.toFixed(1)} کیلومتر</span>}</div></div></div></button>})}{!myDailyAssignments.length&&<div className="rounded-2xl border border-dashed bg-white py-16 text-center text-xs text-gray-400">هنوز کاری به شما واگذار نشده است.</div>}</div></div></>
+    <>{header("کارهای واگذارشده من", () => setScreen("home"))}<div className="p-3 pb-24">{!!dailyRoute.length&&<div className="mb-3 rounded-2xl border border-blue-200 bg-blue-50 p-3"><div className="flex items-center justify-between"><div><b className="text-xs text-blue-900">مسیر پیشنهادی امروز</b><div className="mt-1 text-[10px] text-blue-700">بر اساس نزدیک‌ترین ساختمان‌ها و ترتیب منطقه‌ها</div></div><Compass className="text-blue-600" size={22}/></div><div className="mt-3 grid grid-cols-2 gap-2"><button onClick={()=>{if(!navigator.geolocation)return notify("GPS در دسترس نیست");navigator.geolocation.getCurrentPosition(p=>setUserGps({lat:p.coords.latitude,lng:p.coords.longitude,accuracy:p.coords.accuracy}),()=>notify("موقعیت فعلی دریافت نشد"),{enableHighAccuracy:true,timeout:10000})}} className="rounded-xl border border-blue-300 bg-white py-2.5 text-[11px] font-bold text-blue-700"><Locate size={14} className="ml-1 inline"/>شروع از موقعیت من</button><button onClick={openDailyRoute} className="rounded-xl bg-blue-600 py-2.5 text-[11px] font-bold text-white"><ExternalLink size={14} className="ml-1 inline"/>نمایش مسیر روی نقشه</button></div><div className="mt-2 text-[9px] text-blue-600">{dailyRoute.filter(x=>x.hasLocation).length.toLocaleString("fa-IR")} موقعیت ثبت‌شده · {dailyRoute.filter(x=>!x.hasLocation).length.toLocaleString("fa-IR")} بدون موقعیت</div></div>}<div className="space-y-2">{dailyRoute.map(stop=>{const service=myDailyAssignments.find(item=>item.id===stop.id)!;const contract=contracts.find(item=>item.id===service.contractId||(!!service.contractNo && (item.no===service.contractNo||item.contractNo===service.contractNo)));const job=contract?jobs.find(item=>item.contract.id===contract.id&&(!service.monthId||item.month.id===service.monthId)):undefined;return <button key={service.id} onClick={()=>{if(job){setSelected(job);setScreen("job")}}} className="w-full rounded-2xl border bg-white p-3 text-right shadow-sm"><div className="flex items-start gap-3"><span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-black ${stop.hasLocation?"bg-blue-600 text-white":"bg-gray-200 text-gray-600"}`}>{stop.order.toLocaleString("fa-IR")}</span><div className="min-w-0 flex-1"><div className="flex items-center justify-between"><b className="text-[13px] text-gray-800">{service.buildingName}</b><span className="rounded-full bg-blue-50 px-2 py-1 text-[9px] text-blue-700">{service.date}</span></div><div className="mt-1 text-[10px] text-gray-500">{service.zone} · {service.customerName}</div><div className="mt-2 text-[10.5px] leading-5 text-gray-600">{service.address||"آدرس ثبت نشده"}</div><div className="mt-2 flex justify-between text-[9px]"><span className={stop.hasLocation?"text-emerald-600":"text-amber-600"}>{stop.hasLocation?"موقعیت ثبت شده":"نیازمند ثبت موقعیت"}</span>{stop.distanceFromPreviousKm!=null&&<span className="text-blue-600">فاصله تقریبی {stop.distanceFromPreviousKm.toFixed(1)} کیلومتر</span>}</div></div></div></button>})}{!myDailyAssignments.length&&<div className="rounded-2xl border border-dashed bg-white py-16 text-center text-xs text-gray-400">هنوز کاری به شما واگذار نشده است.</div>}</div></div></>
   );
 
   const buildDailyReportText = () => {

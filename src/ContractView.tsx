@@ -116,7 +116,7 @@ export default function ContractView({
   // Floating Quick-View Popover State (پنجره نمای سریع سرویس طبق تصویر ارسالی)
   const [quickViewMonth, setQuickViewMonth] = useState<MonthService | null>(null);
   const [quickViewPos, setQuickViewPos] = useState<{ top: number; left: number } | null>(null);
-  const quickViewTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const quickViewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const openQuickView = (s: MonthService, targetEl: HTMLElement) => {
     if (quickViewTimerRef.current) clearTimeout(quickViewTimerRef.current);
@@ -188,8 +188,8 @@ export default function ContractView({
     ["نام ساختمان", contract.building],
     ["مسئول هماهنگی/مشتری", contract.manager],
     ["محل کلید سه‌گوش", contract.triangleKeyLocation || "ثبت نشده"],
-    ["آخرین نظافت", contract.cleaningDates?.at(-1) || "ثبت نشده"],
-    ["آخرین تعویض روغن موتور", contract.motorOilChangeDates?.at(-1) || "ثبت نشده"],
+    ["آخرین نظافت", contract.cleaningDates?.slice(-1)[0] || "ثبت نشده"],
+    ["آخرین تعویض روغن موتور", contract.motorOilChangeDates?.slice(-1)[0] || "ثبت نشده"],
   ];
 
   const actions = [
@@ -865,7 +865,7 @@ export default function ContractView({
                       <div className="flex flex-wrap gap-1">
                         {quickViewMonth.partsList.map((p, idx) => (
                           <span key={idx} className="rounded-md border bg-slate-50 dark:bg-neutral-800 px-2 py-0.5 font-medium text-slate-700 dark:text-neutral-200">
-                            {p.name} ({fa(p.quantity)} عدد)
+                            {p.name} ({fa(p.qty ?? p.quantity ?? 0)} عدد)
                           </span>
                         ))}
                       </div>
@@ -901,7 +901,7 @@ export default function ContractView({
                     <div className="flex items-center justify-between border-b border-dashed border-sky-200/40 dark:border-sky-800/30 pb-1">
                       <span>مبلغ سرویس</span>
                       <span className="font-mono font-bold text-slate-800 dark:text-neutral-100">
-                        {fa((quickViewMonth.amount || contract.monthlyAmount || 7500000).toLocaleString())} ریال
+                        {fa((quickViewMonth.amount || contract.monthlyServiceFee || contract.monthlyAmount || 7500000).toLocaleString())} ریال
                       </span>
                     </div>
 
@@ -948,7 +948,7 @@ export default function ContractView({
                     مبلغ نهایی سرویس
                   </span>
                   <span className="font-mono font-black text-[13.5px] text-emerald-700 dark:text-emerald-400">
-                    {fa(((quickViewMonth.amount || contract.monthlyAmount || 7500000) + (quickViewMonth.partsAmount || 0) + (quickViewMonth.wage || 0) + (quickViewMonth.trip || 0) - (quickViewMonth.discount || 0) + (quickViewMonth.tax || 0)).toLocaleString())} ریال
+                    {fa(((quickViewMonth.amount || contract.monthlyServiceFee || contract.monthlyAmount || 7500000) + (quickViewMonth.partsAmount || 0) + (quickViewMonth.wage || 0) + (quickViewMonth.trip || 0) - (quickViewMonth.discount || 0) + (quickViewMonth.tax || 0)).toLocaleString())} ریال
                   </span>
                 </div>
               </div>

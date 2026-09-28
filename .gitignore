@@ -34,3 +34,7 @@ dist-ssr
 
 # PWA dev artifacts (vite-plugin-pwa devOptions)
 dev-dist
+
+# Browser test artifacts
+/test-results/
+/playwright-report/

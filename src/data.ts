@@ -275,6 +275,13 @@ export type ServiceContractDraft = {
 };
 
 export type Contract = {
+  /** Optional legacy import fields: read compatibility only, no storage migration. */
+  technician?: string;
+  monthlyAmount?: number;
+  contractNo?: string;
+  elevatorType?: string;
+  stops?: string | number;
+  floors?: string | number;
   id: number;
   no: string;
   building: string;
