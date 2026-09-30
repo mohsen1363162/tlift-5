@@ -63,6 +63,8 @@ const queue = (page: Page) => page.evaluate(() => JSON.parse(localStorage.getIte
 test('offline service UI: save, reload, assign, failed send and successful retry', async ({ page, baseURL }) => {
   const server = await sandbox(page, baseURL!);
   await page.context().setOffline(true);
+  // A service never starts before the workday: the technician presses «شروع کار» first (3.36.15).
+  await page.getByRole('button', { name: 'شروع کار', exact: true }).click();
   await page.getByText('ثبت سرویس آفلاین', { exact: true }).click();
   await page.getByPlaceholder('نام مشتری یا ساختمان...').fill('ساختمان آزمایشی');
   await page.getByRole('button', { name: 'شروع ثبت آفلاین', exact: true }).click();
@@ -367,3 +369,58 @@ for (const entries of [{ tlift_contracts: 'broken' }, { tlift_contract_details: 
     expect(result.after).toEqual(result.before);
   });
 }
+
+// One technician works on one service at a time. The in-progress list is a shared array that every
+// device syncs; merging stale copies must never give one person two services.
+const ACTIVE_KEY = 'tlift_active_service_assignments_v1';
+const inProgress = (contractId: number, technicianName: string, startedAt: number) => ({ contractId, monthId: 1, technicianName, startedAt, buildingName: `ساختمان ${contractId}` });
+
+test('409 retry merges in-progress lists: everybody is kept, but one person never has two services (newest start wins)', async ({ page, baseURL }) => {
+  const server = await sandbox(page, baseURL!);
+  const person = 'همکار آزمایشی';
+  server.conflict = { key: ACTIVE_KEY, updated_at: '2026-09-28T00:00:00Z', data: [inProgress(1, person, 1000), inProgress(7, 'همکار دیگر', 1200)] };
+  await page.evaluate(async ({ key, name, row }) => {
+    const sync = (window as any).testApi.sync;
+    sync.pushKey(key, [row]);
+    sync.setManualOffline(false);
+    await sync.flushAll();
+  }, { key: ACTIVE_KEY, name: person, row: inProgress(2, person, 5000) });
+  await expect.poll(() => queue(page)).toEqual({});
+  const saved = server.rows.get(ACTIVE_KEY).data;
+  expect(saved.map((item: any) => item.contractId).sort()).toEqual([2, 7]);
+  expect(saved.filter((item: any) => item.technicianName === person)).toHaveLength(1);
+});
+
+test('pulling a server list with several in-progress services for one person keeps the newest only', async ({ page, baseURL }) => {
+  const server = await sandbox(page, baseURL!);
+  server.rows.set(ACTIVE_KEY, { key: ACTIVE_KEY, updated_at: '2026-09-29T00:00:00Z', data: [
+    inProgress(1, 'محمد حسن رحیمی‌زاده', 100), inProgress(2, 'محمد حسن رحیمی زاده', 300), inProgress(3, 'محمد حسن رحیمی زاده', 200), inProgress(9, 'همکار دیگر', 50),
+  ] });
+  await page.evaluate(async () => {
+    const sync = (window as any).testApi.sync;
+    sync.setManualOffline(false);
+    await sync.pullAll();
+  });
+  const shown = await page.evaluate(() => (window as any).testApi.appStore.getActiveServiceAssignments().map((item: any) => item.contractId).sort());
+  expect(shown).toEqual([2, 9]);
+  expect((await page.evaluate(key => JSON.parse(localStorage.getItem(key) || '[]'), ACTIVE_KEY)).map((item: any) => item.contractId).sort()).toEqual([2, 9]);
+});
+
+test('store: a second service for the same person is refused (nothing is silently replaced); the same service and other people are fine', async ({ page, baseURL }) => {
+  await sandbox(page, baseURL!);
+  const result = await page.evaluate((key) => {
+    const store = (window as any).testApi.appStore;
+    const row = (contractId: number, name: string, startedAt: number) => ({ contractId, monthId: 1, technicianName: name, startedAt, buildingName: `B${contractId}` });
+    const out: Record<string, unknown> = {};
+    out.first = store.startActiveService(row(1, 'محمد رحیمی‌زاده', 100));
+    out.secondSamePerson = store.startActiveService(row(2, 'محمد رحیمی زاده', 200));   // other spelling, same person
+    out.sameServiceAgain = store.startActiveService(row(1, 'محمد رحیمی‌زاده', 100));
+    out.otherPerson = store.startActiveService(row(3, 'همکار دیگر', 300));
+    out.afterStart = store.getActiveServiceAssignments().map((item: any) => item.contractId);
+    store.finishActiveService(1, 1, 'محمد رحیمی زاده');                                    // finishing clears the person's record
+    out.afterFinish = store.getActiveServiceAssignments().map((item: any) => item.contractId);
+    out.stored = JSON.parse(localStorage.getItem(key) || '[]').map((item: any) => item.contractId);
+    return out;
+  }, ACTIVE_KEY);
+  expect(result).toEqual({ first: true, secondSamePerson: false, sameServiceAgain: true, otherPerson: true, afterStart: [1, 3], afterFinish: [3], stored: [3] });
+});

@@ -200,6 +200,7 @@ test('in-progress service: play turns into pause after coming back from the work
   await expect(actions.locator('svg.lucide-play')).toHaveCount(1);
   await expect(actions.locator('svg.lucide-pause')).toHaveCount(0);
 
+  await button(page, 'شروع کار').click(); // a service can only start after the workday has started
   await button(page, 'شروع سرویس').click();
   await expect(page.locator('.classic-page-title')).toHaveText('انجام سرویس');
   await button(page, 'قطعات').click(); // the parts tab, then back

@@ -4,6 +4,7 @@ import { pushKey, registerApplier, syncNow, recordOfflineService, getSyncState }
 import { Contract, Customer, Staff, initialContracts, initialCustomers, initialStaff } from "./data";
 import type { BuildingCsvRow } from "./utils/buildingsCsv";
 import { getContractServiceDay } from "./utils/serviceScheduleDays";
+import { ACTIVE_ASSIGNMENTS_KEY, normalizeActiveAssignments, sameTechnician } from "./utils/activeServices";
 import { getContractOfficialFee } from "./data/contractServiceFees";
 import { matchRegionServices } from "./utils/regionServiceImporter";
 import { recordAudit } from "./auditLog";
@@ -802,7 +803,8 @@ let customers: Customer[] = loadStorage<Customer[]>("tlift_customers", initialCu
 let staff: Staff[] = loadStorage<Staff[]>("tlift_staff", initialStaff);
 let marketingItems: MarketingItem[] = loadStorage<MarketingItem[]>("tlift_marketing_items", INITIAL_MARKETING_ITEMS);
 let scheduledServices: ScheduledService[] = loadStorage<ScheduledService[]>("tlift_scheduled_services", INITIAL_SCHEDULED_SERVICES);
-let activeServiceAssignments: ActiveServiceAssignment[] = loadStorage<ActiveServiceAssignment[]>("tlift_active_service_assignments_v1", []);
+// هر سرویس‌کار هم‌زمان فقط یک کار در حال انجام دارد؛ نسخه‌های قدیمی با چند کار هنگام خواندن اصلاح می‌شوند.
+let activeServiceAssignments: ActiveServiceAssignment[] = normalizeActiveAssignments<ActiveServiceAssignment>(loadStorage<ActiveServiceAssignment[]>(ACTIVE_ASSIGNMENTS_KEY, []));
 let technicianPartDeliveries: TechnicianPartDelivery[] = loadStorage<TechnicianPartDelivery[]>("tlift_technician_part_deliveries_v1", []).map((item) => ({ ...item, usedQuantity: item.usedQuantity || 0, remainingQuantity: item.remainingQuantity ?? item.quantity, status: item.status || "active" }));
 let contractGeoLocations: ContractGeoLocation[] = loadStorage<ContractGeoLocation[]>("tlift_contract_geo_locations_v1", []);
 let companyAccessSettings: CompanyAccessSettings = loadStorage<CompanyAccessSettings>("tlift_company_access_settings_v1", { gpsRequired: true, gpsRadiusMeters: 300, leaders: [], serviceDispatchers: ["مرتضی قاسمعلی", "محمد حسن رحیمی زاده"] });
@@ -1124,7 +1126,9 @@ registerApplier((key, data) => {
       scheduledServices = data as ScheduledService[];
       break;
     case "tlift_active_service_assignments_v1":
-      activeServiceAssignments = data as ActiveServiceAssignment[];
+      // نسخهٔ سرور ممکن است از دستگاه‌ها یا نسخه‌های قدیمی چند کار برای یک نفر داشته باشد.
+      activeServiceAssignments = normalizeActiveAssignments<ActiveServiceAssignment>(data);
+      data = activeServiceAssignments; // همان چیزی که نمایش داده می‌شود ذخیره شود؛ نسخهٔ قبلی در __backup می‌ماند
       break;
     case "tlift_technician_part_deliveries_v1":
       technicianPartDeliveries = data as TechnicianPartDelivery[];
@@ -1964,22 +1968,24 @@ export const appStore = {
 
   // ACTIVE SERVICE LOCKS
   getActiveServiceAssignments: () => activeServiceAssignments,
-  startActiveService: (assignment: ActiveServiceAssignment) => {
-    // هر تکنسین فقط یک کار فعال و هر سرویس فقط یک مجری فعال دارد.
-    activeServiceAssignments = activeServiceAssignments.filter(
-      (item) =>
-        item.technicianName !== assignment.technicianName &&
-        !(item.contractId === assignment.contractId && item.monthId === assignment.monthId)
-    );
-    activeServiceAssignments = [...activeServiceAssignments, assignment];
-    saveStorage("tlift_active_service_assignments_v1", activeServiceAssignments);
+  // هر تکنسین فقط یک کار فعال و هر سرویس فقط یک مجری فعال دارد. شروع سرویس دوم تا پایان یا لغو
+  // سرویس اول رد می‌شود (false)؛ قبلاً نشانهٔ سرویس اول بی‌صدا پاک می‌شد.
+  startActiveService: (assignment: ActiveServiceAssignment): boolean => {
+    const sameService = (item: ActiveServiceAssignment) => item.contractId === assignment.contractId && item.monthId === assignment.monthId;
+    if (activeServiceAssignments.some((item) => sameTechnician(item.technicianName, assignment.technicianName) && !sameService(item))) return false;
+    activeServiceAssignments = normalizeActiveAssignments<ActiveServiceAssignment>([
+      ...activeServiceAssignments.filter((item) => !sameService(item)),
+      assignment,
+    ]);
+    saveStorage(ACTIVE_ASSIGNMENTS_KEY, activeServiceAssignments);
     notifyListeners();
+    return true;
   },
   finishActiveService: (contractId: number, monthId: number, technicianName?: string) => {
     activeServiceAssignments = activeServiceAssignments.filter(
       (item) =>
         !(item.contractId === contractId && item.monthId === monthId) &&
-        !(technicianName && item.technicianName === technicianName)
+        !(technicianName && sameTechnician(item.technicianName, technicianName))
     );
     saveStorage("tlift_active_service_assignments_v1", activeServiceAssignments);
     notifyListeners();

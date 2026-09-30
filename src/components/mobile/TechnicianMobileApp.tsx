@@ -95,6 +95,7 @@ import {
 } from "../../utils/workHoursTracker";
 import { getShamsiDaysInMonth, getShamsiFirstDayOfWeek, jalaliToGregorian } from "../../utils/dateConverter";
 import { checkForAppUpdates, APP_VERSION } from "../../utils/appUpdater";
+import { sameTechnician } from "../../utils/activeServices";
 
 /* -------------------------------------------------------------------------- */
 /*                                   helpers                                  */
@@ -177,6 +178,9 @@ const LS = {
 const MAX_WORK_SESSION_SECONDS = 12 * 60 * 60;
 
 type Job = { contract: Contract; month: MonthService; overdue: boolean };
+
+// پنجرهٔ هشدار شروع سرویس: «ابتدا شروع کار روز» یا «سرویس قبلی هنوز در حال انجام است».
+type StartBlock = { kind: "day" } | { kind: "active"; buildingName: string; contractId: number; monthId: number };
 type Screen = "home" | "job" | "work" | "report" | "sign" | "map" | "calendar" | "services" | "triangleKeys" | "technicianParts" | "dailyDispatch" | "myAssignedJobs" | "dailyReports" | "offlineService" | "offlineQueue";
 
 // کارت‌های دسترسی سریع صفحهٔ خانه؛ هر امکان قبلی باید دست‌کم یک مسیر دیده‌شدنی داشته باشد.
@@ -277,6 +281,7 @@ export default function TechnicianMobileApp({
   const [draftMappings, setDraftMappings] = useState<Record<string, string>>({});
   const [navTarget, setNavTarget] = useState<{ building: string; address?: string; lat: number; lng: number } | null>(null);
   const [callContract, setCallContract] = useState<Contract | null>(null);
+  const [startBlock, setStartBlock] = useState<StartBlock | null>(null);
 
   const openNavigation = (target: { building: string; address?: string; lat: number; lng: number }) => {
     setNavTarget(target);
@@ -615,7 +620,7 @@ export default function TechnicianMobileApp({
 
   // سرویس فعال بعد از Refresh نیز باید در کادر «کار جاری» باقی بماند.
   useEffect(() => {
-    const activeAssignment = activeServiceAssignments.find((item) => item.technicianName === technician.name);
+    const activeAssignment = activeServiceAssignments.find((item) => sameTechnician(item.technicianName, technician.name));
     if (!activeAssignment) return;
     const activeJob = jobs.find((job) => job.contract.id === activeAssignment.contractId && job.month.id === activeAssignment.monthId);
     if (!activeJob) return;
@@ -682,9 +687,15 @@ export default function TechnicianMobileApp({
   };
 
   const startOfflineService = () => {
-    const myActive = activeServiceAssignments.find((item) => item.technicianName === technician.name);
-    if (myActive || jobStart) {
-      notify(`ابتدا سرویس فعال ${myActive ? `«${myActive.buildingName}»` : "فعلی"} را به پایان برسانید`);
+    // تا «شروع کار» روزانه زده نشده، هیچ سرویسی حتی سرویس آفلاین شروع نمی‌شود.
+    if (!dayStart) { setStartBlock({ kind: "day" }); return; }
+    const myActive = appStore.getActiveServiceAssignments().find((item) => sameTechnician(item.technicianName, technician.name));
+    if (myActive) {
+      setStartBlock({ kind: "active", buildingName: myActive.buildingName, contractId: myActive.contractId, monthId: myActive.monthId });
+      return;
+    }
+    if (jobStart) {
+      notify("ابتدا سرویس فعال فعلی را به پایان برسانید");
       return;
     }
     const name = offlineCustomerName.trim();
@@ -713,7 +724,6 @@ export default function TechnicianMobileApp({
     setJobStart(Date.now());
     setJobStartClock(nowTime());
     setScreen("work");
-    if (!dayStart) toggleDay();
   };
 
   const getCurrentPosition = () => new Promise<GeolocationPosition>((resolve, reject) => {
@@ -746,7 +756,20 @@ export default function TechnicianMobileApp({
     notify("موقعیت دقیق ساختمان ثبت شد");
   };
 
+  // سرویس در حال انجام همین همکار (از فهرست تازهٔ فروشگاه؛ نه از کپی قدیمی state).
+  const myRunningService = () =>
+    appStore.getActiveServiceAssignments().find((item) => sameTechnician(item.technicianName, technician.name));
+
   const startService = async (j: Job) => {
+    // ۱) تا «شروع کار» روزانه زده نشده، هیچ سرویسی شروع نمی‌شود و روز کاری خودکار شروع نمی‌شود.
+    if (!dayStart) { setStartBlock({ kind: "day" }); return; }
+    // ۲) هم‌زمان فقط یک سرویس: سرویس قبلی باید پایان یابد یا لغو شود.
+    const running = myRunningService();
+    if (running && !(running.contractId === j.contract.id && running.monthId === j.month.id)) {
+      setStartBlock({ kind: "active", buildingName: running.buildingName, contractId: running.contractId, monthId: running.monthId });
+      return;
+    }
+    if (isAdhocOfflineService && jobStart) { notify("ابتدا سرویس آفلاین در حال انجام را پایان دهید"); return; }
     const location = appStore.getContractGeoLocation(j.contract.id);
     if (location && accessSettings.gpsRequired) {
       try {
@@ -758,48 +781,46 @@ export default function TechnicianMobileApp({
         }
       } catch { notify("برای شروع سرویس، GPS و مجوز موقعیت مکانی را فعال کنید"); return; }
     }
-    const myActive = activeServiceAssignments.find(
-      (item) => item.technicianName === technician.name
-    );
-    if (myActive && !(myActive.contractId === j.contract.id && myActive.monthId === j.month.id)) {
-      notify(`ابتدا سرویس فعال «${myActive.buildingName}» را به پایان برسانید`);
-      return;
-    }
-    const serviceActive = activeServiceAssignments.find(
+    const serviceActive = appStore.getActiveServiceAssignments().find(
       (item) => item.contractId === j.contract.id && item.monthId === j.month.id
     );
-    if (serviceActive && serviceActive.technicianName !== technician.name) {
+    if (serviceActive && !sameTechnician(serviceActive.technicianName, technician.name)) {
       notify(`این سرویس در حال انجام توسط ${serviceActive.technicianName} است`);
       return;
     }
 
-    setIsAdhocOfflineService(false);
-    setSelected(j);
     const startedAt = serviceActive?.startedAt || Date.now();
-    setJobStart(startedAt);
-    setJobStartClock(nowTime());
-    appStore.startActiveService({
+    const started = appStore.startActiveService({
       contractId: j.contract.id,
       monthId: j.month.id,
       technicianName: technician.name,
       startedAt,
       buildingName: j.contract.building.replace(/^\*\s*/, ""),
     });
+    if (!started) {
+      // در فاصلهٔ بررسی موقعیت، سرویس دیگری برای همین همکار ثبت شده است.
+      const other = myRunningService();
+      if (other) setStartBlock({ kind: "active", buildingName: other.buildingName, contractId: other.contractId, monthId: other.monthId });
+      return;
+    }
+    setIsAdhocOfflineService(false);
+    setSelected(j);
+    setJobStart(startedAt);
+    setJobStartClock(nowTime());
     localStorage.setItem(LS.activeJob, JSON.stringify({ contractId: j.contract.id, monthId: j.month.id, startedAt }));
     setScreen("work");
-    if (!dayStart) toggleDay();
   };
 
   // سرویسی که همین همکار شروع کرده و هنوز پایان نداده است؛ دکمهٔ آن باید «در حال انجام» نشان دهد، نه «شروع».
   const isMyActiveService = (j: Job) =>
     activeServiceAssignments.some(
-      (item) => item.technicianName === technician.name && item.contractId === j.contract.id && item.monthId === j.month.id
+      (item) => sameTechnician(item.technicianName, technician.name) && item.contractId === j.contract.id && item.monthId === j.month.id
     );
 
   // ادامهٔ سرویس در حال انجام: بدون شروع دوباره و بدون بررسی مجدد GPS (زمان شروع همان زمان ثبت‌شده می‌ماند).
   const continueService = (j: Job) => {
     const active = activeServiceAssignments.find(
-      (item) => item.technicianName === technician.name && item.contractId === j.contract.id && item.monthId === j.month.id
+      (item) => sameTechnician(item.technicianName, technician.name) && item.contractId === j.contract.id && item.monthId === j.month.id
     );
     setIsAdhocOfflineService(false);
     setSelected(j);
@@ -3541,6 +3562,62 @@ export default function TechnicianMobileApp({
       </div>
     ) : null;
 
+  const renderStartBlockSheet = () => {
+    if (!startBlock) return null;
+    const close = () => setStartBlock(null);
+    const shell = (icon: React.ReactNode, title: string, text: string, actions: React.ReactNode) => (
+      <div className="fixed inset-0 z-[90] flex items-end justify-center bg-black/60 p-3 sm:items-center" onClick={close}>
+        <div role="alertdialog" aria-modal="true" aria-labelledby="start-block-title" aria-describedby="start-block-text" className="w-full max-w-md overflow-hidden rounded-2xl bg-white shadow-2xl" onClick={(event) => event.stopPropagation()}>
+          <div className="flex items-start gap-3 p-4">
+            <span className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-amber-100 text-amber-600">{icon}</span>
+            <div className="min-w-0">
+              <div id="start-block-title" className="text-[15px] font-bold text-gray-900">{title}</div>
+              <p id="start-block-text" className="mt-1 text-[12.5px] leading-6 text-gray-600">{text}</p>
+            </div>
+          </div>
+          <div className="space-y-2 border-t bg-gray-50 p-3">{actions}</div>
+        </div>
+      </div>
+    );
+    if (startBlock.kind === "day") {
+      return shell(
+        <Clock size={22} />,
+        "ابتدا «شروع کار» را بزنید",
+        "تا شروع کار روز را نزده‌اید، هیچ سرویسی شروع نمی‌شود. اول دکمهٔ «شروع کار» بالای صفحه را بزنید، بعد سرویس را شروع کنید.",
+        <div className="grid grid-cols-2 gap-2">
+          <button type="button" onClick={() => { close(); if (!dayStart) toggleDay(); }} className="flex items-center justify-center gap-1.5 rounded-xl bg-emerald-600 py-2.5 text-[13px] font-bold text-white active:scale-95"><Play size={15} fill="white" /> شروع کار روز</button>
+          <button type="button" onClick={close} className="rounded-xl border bg-white py-2.5 text-[13px] text-gray-700">بستن</button>
+        </div>
+      );
+    }
+    const name = startBlock.buildingName.replace(/^\*\s*/, "");
+    const runningJob = jobs.find((item) => item.contract.id === startBlock.contractId && item.month.id === startBlock.monthId);
+    const cancelRunning = () => {
+      if (!window.confirm(`سرویس «${name}» لغو شود؟ اطلاعات ثبت‌نشده این سرویس حذف خواهد شد.`)) return;
+      appStore.finishActiveService(startBlock.contractId, startBlock.monthId, technician.name);
+      resetWork();
+      setIsAdhocOfflineService(false);
+      if (selected && selected.contract.id === startBlock.contractId && selected.month.id === startBlock.monthId && screen === "home") setSelected(null);
+      localStorage.removeItem(LS.activeJob);
+      close();
+      notify("سرویس در حال انجام لغو شد");
+    };
+    return shell(
+      <Pause size={22} fill="currentColor" />,
+      "سرویس قبلی هنوز در حال انجام است",
+      `«${name}» را شروع کرده‌اید و هنوز پایان نداده‌اید. هم‌زمان فقط یک سرویس می‌تواند در حال انجام باشد؛ ابتدا همان را پایان دهید، بعد سرویس بعدی را شروع کنید. اگر آن را قبلاً تمام کرده‌اید و این نشانه جا مانده، «لغو سرویس در حال انجام» آن را پاک می‌کند.`,
+      <>
+        {runningJob && (
+          <button type="button" onClick={() => { close(); continueService(runningJob); }} className="flex w-full items-center justify-center gap-1.5 rounded-xl bg-emerald-600 py-2.5 text-[13px] font-bold text-white active:scale-95"><Pause size={15} fill="white" /> ادامهٔ سرویس در حال انجام</button>
+        )}
+        <div className="grid grid-cols-2 gap-2">
+          <button type="button" onClick={cancelRunning} className="rounded-xl border border-red-200 bg-red-50 py-2.5 text-[12.5px] font-bold text-red-600">لغو سرویس در حال انجام</button>
+          <button type="button" onClick={close} className="rounded-xl border bg-white py-2.5 text-[13px] text-gray-700">بستن</button>
+        </div>
+      </>
+    );
+  };
+
   const renderCallSheet = () => {
     if (!callContract) return null;
     const c = callContract;
@@ -3751,6 +3828,7 @@ export default function TechnicianMobileApp({
         {renderPayModal()}
         {renderNavModal()}
         {renderCallSheet()}
+        {renderStartBlockSheet()}
         {locationDraft && (
           <div className="fixed inset-0 z-[75] flex items-end justify-center bg-black/55 p-3 sm:items-center">
             <div className="w-full max-w-md overflow-hidden rounded-2xl bg-white shadow-2xl">

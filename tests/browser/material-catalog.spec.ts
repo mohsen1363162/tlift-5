@@ -122,6 +122,7 @@ test('mobile service picker finds former code and selects the higher-price canon
   const errors = await isolate(page, baseURL!);
   await page.evaluate(() => (window as any).testApi.partsApi.applyMaterialImport());
   await page.getByRole('button', { name: 'نمای موبایل', exact: true }).click();
+  await page.getByRole('button', { name: 'شروع کار', exact: true }).click();  // a service never starts before the workday (3.36.15)
   await page.getByRole('button', { name: 'نمایش سایر امکانات', exact: true }).click();
   await page.getByText('ثبت سرویس آفلاین', { exact: true }).click();
   await page.getByPlaceholder('نام مشتری یا ساختمان...').fill('ساختمان آزمایشی');

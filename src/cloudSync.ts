@@ -5,6 +5,7 @@
  */
 import { supabase } from "@/integrations/supabase/client";
 import { clearDeviceToken, getDeviceToken } from "./utils/deviceAuth";
+import { ACTIVE_ASSIGNMENTS_KEY, mergeActiveAssignments } from "./utils/activeServices";
 
 export type SyncStatus = "idle" | "syncing" | "online" | "offline" | "error";
 
@@ -345,6 +346,8 @@ function mergeContractDetails(serverData: any, localData: any) {
 
 function autoMergeConflict(key: string, serverData: unknown, localData: unknown): unknown {
   if (key === "tlift_contract_details") return mergeContractDetails(serverData, localData);
+  // اتحاد ساده چند کار «در حال انجام» برای یک نفر می‌سازد؛ برای هر نفر فقط جدیدترین شروع می‌ماند.
+  if (key === ACTIVE_ASSIGNMENTS_KEY) return mergeActiveAssignments(serverData, localData);
   if (Array.isArray(serverData) && Array.isArray(localData)) {
     if (key === "tlift_pinned_contracts_v1") {
       return Array.from(new Set([...serverData, ...localData]));
