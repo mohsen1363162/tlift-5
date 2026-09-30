@@ -424,3 +424,50 @@ test('store: a second service for the same person is refused (nothing is silentl
   }, ACTIVE_KEY);
   expect(result).toEqual({ first: true, secondSamePerson: false, sameServiceAgain: true, otherPerson: true, afterStart: [1, 3], afterFinish: [3], stored: [3] });
 });
+
+// 3.36.17 — bulk position import uses the real store: one write for the whole file, every entry validated, the history keeps the old values.
+const GEO_KEY = 'tlift_contract_geo_locations_v1';
+test('store: a batch of positions is one write, invalid entries are skipped, the last entry per building wins, and the history keeps what was replaced (without a «before»)', async ({ page, baseURL }) => {
+  await sandbox(page, baseURL!);
+  const out = await page.evaluate((key) => {
+    const store = (window as any).testApi.appStore;
+    const [a, b, c] = ['ساختمان جغرافیایی ۱', 'ساختمان جغرافیایی ۲', 'ساختمان جغرافیایی ۳'].map((name) => store.getOrCreateContractForCustomer(name));
+    store.setContractGeoLocation({ contractId: a.id, latitude: 36.1, longitude: 50.1, accuracy: 5, updatedAt: 1 });   // a already has a position
+
+    const original = Storage.prototype.setItem;
+    let writes = 0;
+    Storage.prototype.setItem = function (name: string, value: string) { if (name === key) writes++; return original.call(this, name, value); };
+    const batch = [
+      { contractId: a.id, latitude: 36.2, longitude: 50.2, updatedAt: 10 },     // replaces a
+      { contractId: b.id, latitude: 36.3, longitude: 50.3, updatedAt: 10 },
+      { contractId: c.id, latitude: 36.4, longitude: 50.4, updatedAt: 10 },
+      { contractId: 424242, latitude: 36.5, longitude: 50.5, updatedAt: 10 },   // no such contract
+      { contractId: b.id, latitude: NaN, longitude: 50, updatedAt: 10 },        // not a number
+      { contractId: c.id, latitude: 95, longitude: 50, updatedAt: 10 },         // latitude out of range
+      { contractId: c.id, latitude: 36.6, longitude: 181, updatedAt: 10 },      // longitude out of range
+      { contractId: b.id, latitude: 36.35, longitude: 50.35, updatedAt: 11 },   // a later valid entry for b wins
+    ];
+    const result = store.setContractGeoLocations(batch);
+    const batchWrites = writes;
+    const afterBatch = JSON.parse(localStorage.getItem(key) || '[]').map((item: any) => [item.contractId === a.id ? 'a' : item.contractId === b.id ? 'b' : 'c', item.latitude, item.accuracy ?? null]);
+
+    writes = 0;
+    const nothing = store.setContractGeoLocations([{ contractId: 424242, latitude: 36.5, longitude: 50.5, updatedAt: 12 }, { contractId: a.id, latitude: Infinity, longitude: 50, updatedAt: 12 }]);
+    const emptyWrites = writes;
+    const emptyAgain = store.setContractGeoLocations([]);
+    Storage.prototype.setItem = original;
+
+    const audit = JSON.parse(localStorage.getItem('tlift_audit_log_v1') || '[]').filter((event: any) => event.action === 'ورود گروهی موقعیت ساختمان‌ها');
+    return { result, batchWrites, afterBatch, nothing, emptyWrites, emptyAgain, auditCount: audit.length, auditHasBefore: 'before' in audit[0], replaced: audit[0].after.replacedPrevious.map((item: any) => [item.latitude, item.accuracy]), summary: [audit[0].after.added, audit[0].after.replaced, audit[0].after.skipped] };
+  }, GEO_KEY);
+  expect(out.result).toEqual({ saved: 3, added: 2, replaced: 1, skipped: 4 });
+  expect(out.batchWrites).toBe(1);                                                        // one save for the whole batch
+  expect(out.afterBatch).toEqual([['a', 36.2, null], ['b', 36.35, null], ['c', 36.4, null]]);
+  expect(out.nothing).toEqual({ saved: 0, added: 0, replaced: 0, skipped: 2 });
+  expect(out.emptyAgain).toEqual({ saved: 0, added: 0, replaced: 0, skipped: 0 });
+  expect(out.emptyWrites).toBe(0);                                                        // nothing valid → nothing written, nothing logged
+  expect(out.auditCount).toBe(1);
+  expect(out.auditHasBefore).toBe(false);                                                 // the history page would offer a contract rollback for an event with «before»
+  expect(out.replaced).toEqual([[36.1, 5]]);                                              // the replaced position is kept for manual recovery
+  expect(out.summary).toEqual([2, 1, 4]);
+});

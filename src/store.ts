@@ -261,19 +261,31 @@ function saveContractDetailsSoon() {
   if (contractDetailsSaveTimer !== null) return;
   contractDetailsSaveTimer = setTimeout(() => {
     contractDetailsSaveTimer = null;
-    saveStorage("tlift_contract_details", contractDetailsMap);
+    // هم‌ترازسازی بی‌صدا: کسی که جزئیات را خوانده همان نسخهٔ هم‌تراز را گرفته است؛ پس «نسخهٔ تغییر» زیر بالا نمی‌رود.
+    persistStorage("tlift_contract_details", contractDetailsMap);
   }, 0);
 }
 
-function saveStorage<T>(key: string, data: T) {
-  if (key === "tlift_contract_details" && contractDetailsSaveTimer !== null) {
-    // یک ذخیرهٔ مستقیم جدیدتر از نوشتن منتظر است؛ نیازی به نوشتن دوباره نیست.
-    clearTimeout(contractDetailsSaveTimer);
-    contractDetailsSaveTimer = null;
-  }
+// شمارندهٔ تغییر جزئیات قراردادها. فهرست سرویس‌ها (jobs) در نسخهٔ موبایل از روی جزئیات ساخته می‌شود و فقط وقتی
+// این شمارنده عوض شود دوباره ساخته می‌شود؛ قبلاً برای همین کار هر ۵ ثانیه کل فهرست بی‌دلیل از نو ساخته می‌شد.
+let contractDetailsRevision = 0;
+
+function persistStorage<T>(key: string, data: T) {
   writeLocalStorage(key, data);
   // آینه‌سازی در سرور (پرچم‌های seed همگام نمی‌شوند)
   if (!key.includes("seeded")) pushKey(key, data);
+}
+
+function saveStorage<T>(key: string, data: T) {
+  if (key === "tlift_contract_details") {
+    contractDetailsRevision++;
+    if (contractDetailsSaveTimer !== null) {
+      // یک ذخیرهٔ مستقیم جدیدتر از نوشتن منتظر است؛ نیازی به نوشتن دوباره نیست.
+      clearTimeout(contractDetailsSaveTimer);
+      contractDetailsSaveTimer = null;
+    }
+  }
+  persistStorage(key, data);
 }
 
 // اگر برنامه روی مرورگر/پیش‌نمایش تازه اجرا شود و دیتابیس محلی خالی باشد،
@@ -1057,6 +1069,7 @@ void restoreBootstrapWhenEmpty().then((restored) => {
   customers = loadStorage<Customer[]>("tlift_customers", customers);
   const restoredDetails = loadStorage<Record<number, ContractDetails>>("tlift_contract_details", contractDetailsMap);
   Object.assign(contractDetailsMap, restoredDetails);
+  contractDetailsRevision++;
   reconcileScheduledServicesWithContracts(false);
   notifyListeners();
   if (typeof navigator !== "undefined" && navigator.onLine) {
@@ -1169,6 +1182,7 @@ registerApplier((key, data) => {
       const incoming = data as Record<number, ContractDetails>;
       Object.keys(contractDetailsMap).forEach((k) => delete contractDetailsMap[Number(k)]);
       Object.assign(contractDetailsMap, incoming);
+      contractDetailsRevision++;
       reconcileScheduledServicesWithContracts(false);
       break;
     }
@@ -1921,6 +1935,30 @@ export const appStore = {
     saveStorage("tlift_contract_geo_locations_v1", contractGeoLocations);
     notifyListeners();
   },
+  // ثبت گروهی موقعیت‌ها (ورود از CSV): یک‌بار ذخیره و یک‌بار اطلاع‌رسانی، نه یک‌بار برای هر ساختمان.
+  // مختصات نامعتبر یا قرارداد ناشناخته ذخیره نمی‌شود؛ اگر یک ساختمان چند بار بیاید آخرین مقدار می‌ماند.
+  // تغییر در تاریخچه ثبت می‌شود؛ مقدارهای قبلیِ جایگزین‌شده داخل همان رویداد می‌مانند تا در صورت لزوم برگردانده شوند.
+  setContractGeoLocations: (locations: ContractGeoLocation[]) => {
+    const knownIds = new Set(contracts.map((contract) => contract.id));
+    const accepted = new Map<number, ContractGeoLocation>();
+    let skipped = 0;
+    for (const location of locations) {
+      const valid = knownIds.has(location.contractId)
+        && Number.isFinite(location.latitude) && Number.isFinite(location.longitude)
+        && Math.abs(location.latitude) <= 90 && Math.abs(location.longitude) <= 180;
+      if (!valid) { skipped++; continue; }
+      accepted.set(location.contractId, location);
+    }
+    if (!accepted.size) return { saved: 0, added: 0, replaced: 0, skipped };
+    const replacedBefore = contractGeoLocations.filter((item) => accepted.has(item.contractId));
+    contractGeoLocations = [...accepted.values(), ...contractGeoLocations.filter((item) => !accepted.has(item.contractId))];
+    saveStorage("tlift_contract_geo_locations_v1", contractGeoLocations);
+    const added = accepted.size - replacedBefore.length;
+    // بدون «before»: صفحهٔ تاریخچه برای رویدادهای قرارداد دکمهٔ بازگردانی نشان می‌دهد که فقط برای خود قرارداد معنا دارد.
+    recordAudit({ action: "ورود گروهی موقعیت ساختمان‌ها", entityType: "contract", entityId: "geo-import", title: `${accepted.size} ساختمان (${added} جدید، ${replacedBefore.length} جایگزین)`, after: { added, replaced: replacedBefore.length, skipped, replacedPrevious: replacedBefore } });
+    notifyListeners();
+    return { saved: accepted.size, added, replaced: replacedBefore.length, skipped };
+  },
 
   // TECHNICIAN PART DELIVERIES
   getTechnicianPartDeliveries: () => technicianPartDeliveries,
@@ -2434,6 +2472,17 @@ export function useChecklistCategories() {
       return () => listeners.delete(callback);
     },
     () => checklistCategories
+  );
+}
+
+/** نسخهٔ جزئیات قراردادها؛ با هر ذخیره/دریافت تازه از سرور عوض می‌شود و فقط همان لحظه رندر می‌خواهد. */
+export function useContractDetailsRevision() {
+  return useSyncExternalStore(
+    (callback) => {
+      listeners.add(callback);
+      return () => listeners.delete(callback);
+    },
+    () => contractDetailsRevision
   );
 }
 

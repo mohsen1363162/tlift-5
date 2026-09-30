@@ -1,5 +1,5 @@
 import "./technicianClassic.css";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   Menu,
   Play,
@@ -67,6 +67,7 @@ import {
   appStore,
   useContracts,
   useContractGeoLocations,
+  useContractDetailsRevision,
   useChecklist,
   useChecklistCategories,
   useActiveServiceAssignments,
@@ -105,6 +106,10 @@ import {
 import { getShamsiDaysInMonth, getShamsiFirstDayOfWeek, jalaliToGregorian } from "../../utils/dateConverter";
 import { checkForAppUpdates, APP_VERSION } from "../../utils/appUpdater";
 import { sameTechnician } from "../../utils/activeServices";
+import { firstPendingPerContract, orderJobs } from "../../utils/serviceJobs";
+import { acquireBestPosition, REGISTER_MAX_ACCURACY_M } from "../../utils/bestPosition";
+import LiveTicker from "./LiveTicker";
+import { secondsSince, useBrowserOnline, useLocalDayKey } from "../../hooks/useLiveClock";
 
 /* -------------------------------------------------------------------------- */
 /*                                   helpers                                  */
@@ -158,9 +163,19 @@ const compressProjectPhoto = (file: File): Promise<string> => new Promise((resol
   };
   reader.readAsDataURL(file);
 });
-const jobDate = (job: Job) =>
-  normalizeJalaliDate(job.month.plannedDate || job.month.date) ||
-  `${job.month.y}/${String(monthNumber(job.month.m)).padStart(2, "0")}/${String(job.month.id || 1).padStart(2, "0")}`;
+// تاریخ سرویس هر ماه فقط یک‌بار حساب می‌شود (نرمال‌سازی ارقام و regex گران است و برای هزاران سرویس بارها صدا زده می‌شد).
+// نتیجه به خود شیء ماه وابسته است و با هر فیلدی که از آن ساخته می‌شود دوباره اعتبارسنجی می‌شود؛ پس اگر ماه عوض شود کهنه نمی‌ماند.
+const jobDateCache = new WeakMap<object, { planned?: string; date?: string; y: unknown; m: unknown; id: unknown; key: string }>();
+const jobDate = (job: Job) => {
+  const month = job.month;
+  const hit = jobDateCache.get(month);
+  if (hit && hit.planned === month.plannedDate && hit.date === month.date && hit.y === month.y && hit.m === month.m && hit.id === month.id) return hit.key;
+  const key =
+    normalizeJalaliDate(month.plannedDate || month.date) ||
+    `${month.y}/${String(monthNumber(month.m)).padStart(2, "0")}/${String(month.id || 1).padStart(2, "0")}`;
+  jobDateCache.set(month, { planned: month.plannedDate, date: month.date, y: month.y, m: month.m, id: month.id, key });
+  return key;
+};
 
 const jalaliDateTimestamp = (value: string) => {
   const normalized = normalizeJalaliDate(value);
@@ -250,7 +265,7 @@ export default function TechnicianMobileApp({
   const sync = useSyncState();
   const [syncBusy, setSyncBusy] = useState(false);
   const canDispatchServices = true;
-  const browserHasInternet = typeof navigator === "undefined" ? true : navigator.onLine;
+  const browserHasInternet = useBrowserOnline();
   const syncServerUnavailable = browserHasInternet && !sync.isManualOffline && (sync.status === "offline" || sync.status === "error");
   // خطای موقت سرور به معنی قطع اینترنت گوشی نیست؛ بنر بزرگ آفلاین فقط برای
   // قطع واقعی اینترنت، حالت دستی یا وجود سرویس ثبت‌شده در صف نمایش داده می‌شود.
@@ -312,35 +327,48 @@ export default function TechnicianMobileApp({
     const v = localStorage.getItem(LS.day);
     return v ? Number(v) : null;
   });
-  const [tick, setTick] = useState(0);
-  useEffect(() => {
-    const id = setInterval(() => setTick((x) => x + 1), 1000);
-    return () => clearInterval(id);
-  }, []);
+  // ریشهٔ برنامه دیگر هر ثانیه رندر نمی‌شود: اعداد زنده (LiveTicker) فقط خودشان را تازه می‌کنند، «امروز» فقط با عوض شدن روز
+  // و فهرست سرویس‌ها فقط وقتی اطلاعات قراردادها واقعاً عوض شود (detailsRevision) دوباره ساخته می‌شود.
+  const dayKey = useLocalDayKey();
+  const detailsRevision = useContractDetailsRevision();
 
   // ساعت کار ماه شمسی جاری (از اول ماه شمسی شروع شده و مقدار اولیه آن صفر است)
   const [monthBaseSec, setMonthBaseSec] = useState<number>(() => getStoredMonthlySeconds());
-  const currentMonthInfo = useMemo(() => getCurrentJalaliMonthInfo(), [Math.floor(tick / 60)]);
-  const daySec = dayStart ? Math.floor((Date.now() - dayStart) / 1000) : 0;
-  const currentMonthSec = monthBaseSec + (dayStart ? Math.min(daySec, MAX_WORK_SESSION_SECONDS) : 0);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- dayKey فقط «کلید تازه‌سازی» است: با عوض شدن روز دوباره حساب شود
+  const currentMonthInfo = useMemo(() => getCurrentJalaliMonthInfo(), [dayKey]);
   const autoStopHandled = useRef(false);
 
-  // هیچ نوبت کاری بیشتر از ۱۲ ساعت باز نمی‌ماند. این کنترل هم در زمان
-  // باز بودن برنامه و هم بلافاصله پس از بازگشت کاربر به برنامه اجرا می‌شود.
+  // هیچ نوبت کاری بیشتر از ۱۲ ساعت باز نمی‌ماند. این کنترل با یک زمان‌سنج دقیقاً در لحظهٔ رسیدن به سقف اجرا می‌شود
+  // و بلافاصله پس از بازگشت کاربر به برنامه (یا اگر نوبت از قبل قدیمی باشد) هم اجرا می‌شود.
   useEffect(() => {
-    if (!dayStart || daySec < MAX_WORK_SESSION_SECONDS) {
-      if (!dayStart) autoStopHandled.current = false;
+    if (!dayStart) {
+      autoStopHandled.current = false;
       return;
     }
-    if (autoStopHandled.current) return;
-    autoStopHandled.current = true;
+    const limitAt = dayStart + MAX_WORK_SESSION_SECONDS * 1000;
+    const stopAtLimit = () => {
+      if (autoStopHandled.current || Date.now() < limitAt) return;
+      autoStopHandled.current = true;
 
-    localStorage.removeItem(LS.day);
-    const newMonthTotal = addWorkSessionSeconds(MAX_WORK_SESSION_SECONDS);
-    setMonthBaseSec(newMonthTotal);
-    setDayStart(null);
-    notify("نوبت کاری پس از رسیدن به سقف ۱۲ ساعت به‌صورت خودکار پایان یافت.");
-  }, [dayStart, daySec]);
+      localStorage.removeItem(LS.day);
+      const newMonthTotal = addWorkSessionSeconds(MAX_WORK_SESSION_SECONDS);
+      setMonthBaseSec(newMonthTotal);
+      setDayStart(null);
+      notify("نوبت کاری پس از رسیدن به سقف ۱۲ ساعت به‌صورت خودکار پایان یافت.");
+    };
+    stopAtLimit();
+    const timer = window.setTimeout(stopAtLimit, Math.min(Math.max(0, limitAt - Date.now()) + 50, 2_000_000_000));
+    const onReturn = () => { if (!document.hidden) stopAtLimit(); };
+    document.addEventListener("visibilitychange", onReturn);
+    window.addEventListener("focus", onReturn);
+    window.addEventListener("pageshow", onReturn);
+    return () => {
+      window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onReturn);
+      window.removeEventListener("focus", onReturn);
+      window.removeEventListener("pageshow", onReturn);
+    };
+  }, [dayStart]);
 
   const toggleDay = () => {
     if (dayStart) {
@@ -379,23 +407,30 @@ export default function TechnicianMobileApp({
 
   /* -------------------------------- jobs --------------------------------- */
   const jobs = useMemo<Job[]>(() => {
-    const out: Job[] = [];
+    const entries: Array<{ job: Job; done: boolean; date: string }> = [];
     contracts.forEach((contract) => {
       const details = appStore.getContractDetails(contract.id);
       details.months.forEach((month) => {
-        out.push({ contract, month, overdue: false });
+        const job: Job = { contract, month, overdue: false };
+        entries.push({ job, done: !!month.done, date: jobDate(job) });
       });
     });
     // سرویس‌های انجام‌نشده همیشه بالاتر و انجام‌شده‌ها پایین فهرست می‌آیند.
-    return out.sort((a, b) => Number(a.month.done) - Number(b.month.done) || jobDate(a).localeCompare(jobDate(b)));
-  }, [contracts, tick % 5 === 0 ? tick : 0]);
-  const currentJalaliDate = normalizeJalaliDate(
-    new Intl.DateTimeFormat("fa-IR-u-ca-persian", { year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date())
+    return orderJobs(entries);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- detailsRevision فقط «کلید تازه‌سازی» است: با هر تغییر جزئیات قراردادها دوباره ساخته شود
+  }, [contracts, detailsRevision]);
+  const currentJalaliDate = useMemo(
+    () => normalizeJalaliDate(
+      new Intl.DateTimeFormat("fa-IR-u-ca-persian", { year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date())
+    ),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- dayKey فقط «کلید تازه‌سازی» است: با عوض شدن روز دوباره حساب شود
+    [dayKey]
   );
-  const previousMonthInfo = useMemo(() => getPreviousJalaliMonthInfo(), [Math.floor(tick / 60)]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- dayKey فقط «کلید تازه‌سازی» است: با عوض شدن روز دوباره حساب شود
+  const previousMonthInfo = useMemo(() => getPreviousJalaliMonthInfo(), [dayKey]);
   const todayTimestamp = jalaliDateTimestamp(currentJalaliDate);
   const thirtyDaysAgo = todayTimestamp - 30 * 24 * 60 * 60 * 1000;
-  const todayJobs = jobs.filter((job) => jobDate(job) === currentJalaliDate);
+  const todayJobs = useMemo(() => jobs.filter((job) => jobDate(job) === currentJalaliDate), [jobs, currentJalaliDate]);
 
   // کارهای ماه گذشته که انجام نشده‌اند (مثلاً در مهرماه، فقط کارهای انجام‌نشده شهریور)
   const lastMonthPendingJobs = useMemo(() => {
@@ -409,7 +444,7 @@ export default function TechnicianMobileApp({
   }, [jobs, previousMonthInfo]);
 
   // جهت سازگاری با متغیرهای قبلی
-  const pastJobs = jobs.filter(job => !job.month.done && jobDate(job) < currentJalaliDate);
+  const pastJobs = useMemo(() => jobs.filter(job => !job.month.done && jobDate(job) < currentJalaliDate), [jobs, currentJalaliDate]);
 
   const initialCalendar = getCurrentJalaliMonthInfo();
   const [calendarYear, setCalendarYear] = useState(initialCalendar.year);
@@ -432,7 +467,7 @@ export default function TechnicianMobileApp({
   const [dispatchTechnician, setDispatchTechnician] = useState("مجتبی فرهمند");
   const [dispatchDate, setDispatchDate] = useState(currentJalaliDate);
   const [expandedContractId, setExpandedContractId] = useState<number | null>(null);
-  const dispatchCandidates = useMemo(() => jobs.filter((job, index, all) => !job.month.done && all.findIndex((candidate) => candidate.contract.id === job.contract.id && !candidate.month.done) === index), [jobs]);
+  const dispatchCandidates = useMemo(() => firstPendingPerContract(jobs), [jobs]);
   const dispatchZones = useMemo(() => Array.from(new Set(contracts.map((contract) => contract.zone || "بدون منطقه"))).sort(), [contracts]);
   const visibleDispatchCandidates = dispatchCandidates.filter((job) => {
     const zone = job.contract.zone || "بدون منطقه";
@@ -440,11 +475,12 @@ export default function TechnicianMobileApp({
     return zoneMatches && (!dispatchQuery.trim() || `${job.contract.building} ${job.contract.manager} ${job.contract.address || ""}`.includes(dispatchQuery.trim()));
   });
   const myDailyAssignments = scheduledServices.filter((service) => service.technician === technician.name && service.status === "pending").sort((a, b) => a.date.localeCompare(b.date));
-  const myCompletedJobs = jobs.filter(job => job.month.done && (job.month.doneBy === technician.name || job.month.techs?.includes(technician.name)));
-  const myCompletedBreakdowns = contracts.flatMap(contract => (appStore.getContractDetails(contract.id).breakdowns || []).filter(item => item.technicians?.includes(technician.name) && item.status === "انجام شده").map(item => ({ contract, item })));
-  const myReportDates = Array.from(new Set([...myCompletedJobs.map(job => normalizeJalaliDate(job.month.date || "")), ...myCompletedBreakdowns.map(entry => normalizeJalaliDate(entry.item.resolveDate || entry.item.declareDate || ""))].filter(Boolean))).sort((a,b)=>b.localeCompare(a));
-  const selectedDailyReportJobs = myCompletedJobs.filter(job => normalizeJalaliDate(job.month.date || "") === dailyReportDate);
-  const selectedDailyBreakdowns = myCompletedBreakdowns.filter(entry => normalizeJalaliDate(entry.item.resolveDate || entry.item.declareDate || "") === dailyReportDate);
+  const myCompletedJobs = useMemo(() => jobs.filter(job => job.month.done && (job.month.doneBy === technician.name || job.month.techs?.includes(technician.name))), [jobs, technician.name]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- detailsRevision فقط «کلید تازه‌سازی» است: با هر تغییر جزئیات قراردادها دوباره ساخته شود
+  const myCompletedBreakdowns = useMemo(() => contracts.flatMap(contract => (appStore.getContractDetails(contract.id).breakdowns || []).filter(item => item.technicians?.includes(technician.name) && item.status === "انجام شده").map(item => ({ contract, item }))), [contracts, detailsRevision, technician.name]);
+  const myReportDates = useMemo(() => Array.from(new Set([...myCompletedJobs.map(job => normalizeJalaliDate(job.month.date || "")), ...myCompletedBreakdowns.map(entry => normalizeJalaliDate(entry.item.resolveDate || entry.item.declareDate || ""))].filter(Boolean))).sort((a,b)=>b.localeCompare(a)), [myCompletedJobs, myCompletedBreakdowns]);
+  const selectedDailyReportJobs = useMemo(() => myCompletedJobs.filter(job => normalizeJalaliDate(job.month.date || "") === dailyReportDate), [myCompletedJobs, dailyReportDate]);
+  const selectedDailyBreakdowns = useMemo(() => myCompletedBreakdowns.filter(entry => normalizeJalaliDate(entry.item.resolveDate || entry.item.declareDate || "") === dailyReportDate), [myCompletedBreakdowns, dailyReportDate]);
 
   /* ------------------------------- map screen states ------------------------------- */
   const contractGeoLocations = useContractGeoLocations();
@@ -721,7 +757,7 @@ export default function TechnicianMobileApp({
   /* ----------------------------- active service -------------------------- */
   const [jobStart, setJobStart] = useState<number | null>(null);
   const [jobStartClock, setJobStartClock] = useState<string>("");
-  const jobSec = jobStart ? Math.floor((Date.now() - jobStart) / 1000) : 0;
+  // زمان سرویس فقط در نمایش‌های زنده (LiveTicker) و لحظهٔ پایان محاسبه می‌شود؛ نه با رندر هر ثانیهٔ کل برنامه.
 
   // سرویس فعال بعد از Refresh نیز باید در کادر «کار جاری» باقی بماند.
   useEffect(() => {
@@ -861,6 +897,39 @@ export default function TechnicianMobileApp({
     notify("موقعیت دقیق ساختمان ثبت شد");
   };
 
+  // «ثبت موقعیت همین‌جا»: با یک لمس، هنگام انجام سرویس در همان ساختمان. چند ثانیه گوش می‌دهد تا GPS دقیق شود؛ دقت واقعی ثبت می‌شود،
+  // دقت بدتر از ۱۰۰ متر رد می‌شود (مختصات غلط می‌تواند شروع سرویس دیگران را با الزام GPS مسدود کند) و موقعیتی که از قبل ثبت شده
+  // هرگز بازنویسی نمی‌شود (برای اصلاح، «ثبت موقعیت ساختمان» با تنظیم دقیق هست).
+  const [hereBusy, setHereBusy] = useState(false);
+  const [hereStatus, setHereStatus] = useState<{ contractId: number; text: string } | null>(null); // پیام خطا فقط برای همان ساختمان نشان داده می‌شود
+  const registerPositionHere = async (contract: Contract) => {
+    if (hereBusy) return;
+    if (appStore.getContractGeoLocation(contract.id)) { notify("موقعیت این ساختمان قبلاً ثبت شده است"); return; }
+    setHereBusy(true);
+    setHereStatus(null);
+    try {
+      const { coords } = await acquireBestPosition();
+      const accuracy = Math.round(coords.accuracy);
+      if (accuracy > REGISTER_MAX_ACCURACY_M) {
+        setHereStatus({ contractId: contract.id, text: `دقت GPS کافی نیست (حدود ${fa(accuracy)} متر). به فضای باز یا کنار پنجره بروید و دوباره بزنید؛ یا از صفحهٔ قبل «ثبت موقعیت ساختمان» را برای تنظیم دستی بزنید.` });
+        return;
+      }
+      if (appStore.getContractGeoLocation(contract.id)) { notify("موقعیت این ساختمان همین حالا ثبت شد"); return; } // هم‌زمان با همگام‌سازی/ورود گروهی
+      appStore.setContractGeoLocation({ contractId: contract.id, latitude: coords.latitude, longitude: coords.longitude, accuracy, updatedAt: Date.now() });
+      notify(`موقعیت «${contract.building.replace(/^\*\s*/, "")}» ثبت شد (دقت حدود ${fa(accuracy)} متر)`);
+    } catch (error) {
+      const code = (error as { code?: number } | null)?.code;
+      setHereStatus({
+        contractId: contract.id,
+        text: code === 1 ? "اجازهٔ موقعیت مکانی داده نشده است؛ در تنظیمات مرورگر (قفل کنار آدرس) آن را فعال کنید."
+          : code === 0 ? "این دستگاه یا مرورگر GPS ندارد."
+          : "موقعیت دریافت نشد؛ GPS گوشی را روشن کنید، به فضای باز بروید و دوباره بزنید.",
+      });
+    } finally {
+      setHereBusy(false);
+    }
+  };
+
   // موقعیت فعلی همکار برای نقشهٔ «نزدیک من». با ورود به نقشه خودکار اجرا می‌شود (بدون پیام مزاحم)؛
   // اگر دسترسی رد شده باشد مرورگر دوباره سؤال نمی‌کند و پیام راهنما نشان داده می‌شود.
   // ورود خودکار به نقشه ابتدا یک موقعیت سریع و تقریبی می‌گیرد (داخل ساختمان و با GPS ضعیف هم جواب می‌دهد)؛
@@ -975,7 +1044,7 @@ export default function TechnicianMobileApp({
 
   const finishService = (reviewConfirmed = false) => {
     if (!selected) return;
-    if (jobSec >= 2 * 60 * 60 && !reviewConfirmed) {
+    if (secondsSince(jobStart) >= 2 * 60 * 60 && !reviewConfirmed) {
       setCorrectedOutTime(nowTime().slice(0, 5));
       setDurationReason("");
       setDurationReviewOpen(true);
@@ -1214,7 +1283,7 @@ export default function TechnicianMobileApp({
         </button>
         <span className="classic-page-title">{title || ""}</span>
         <button type="button" onClick={toggleDay} className="classic-clock" aria-label={dayStart ? "پایان کار روزانه" : "شروع کار"}>
-          <span dir="ltr">{dayStart ? fmtDur(daySec) : "شروع کار"}</span>
+          <span dir="ltr">{dayStart ? <LiveTicker render={(now) => fmtDur(secondsSince(dayStart, now))} /> : "شروع کار"}</span>
           {dayStart ? <Square size={20} fill="currentColor"/> : <Play size={20} fill="currentColor"/>}
         </button>
       </div>
@@ -1333,7 +1402,7 @@ export default function TechnicianMobileApp({
             <button type="button" onClick={() => setScreen("work")} className="w-full rounded-lg p-2 text-white">
               <div className="flex items-center justify-between">
                 <span className="font-bold">▶ در حال انجام — {selected.contract.building}</span>
-                <span className="rounded bg-white/20 px-2 py-0.5 font-mono text-white">{fmtDur(jobSec)}</span>
+                <span className="rounded bg-white/20 px-2 py-0.5 font-mono text-white"><LiveTicker render={(now) => fmtDur(secondsSince(jobStart, now))} /></span>
               </div>
               <div className="mt-1 text-[10.5px] text-blue-100">برای ادامه سرویس لمس کنید</div>
             </button>
@@ -1861,10 +1930,35 @@ export default function TechnicianMobileApp({
     <div className="flex items-center justify-between bg-blue-600 px-3 py-2 text-white">
       <span className="text-[12px]">{selected?.contract.building.replace(/^\*\s*/, "")}</span>
       <span className="flex items-center gap-1 font-mono text-[14px] font-bold">
-        <Clock size={14} /> {fmtDur(jobSec)}
+        <Clock size={14} /> <LiveTicker render={(now) => fmtDur(secondsSince(jobStart, now))} />
       </span>
     </div>
   );
+
+  // ساختمانی که موقعیتش ثبت نشده، هنگام سرویس همین‌جا پیشنهاد ثبت می‌گیرد؛ با ثبت، کارت خودبه‌خود ناپدید می‌شود.
+  const gpsHereCard = (contract: Contract) => {
+    if (isAdhocOfflineService || appStore.getContractGeoLocation(contract.id)) return null;
+    return (
+      <div role="group" aria-label="ثبت موقعیت ساختمان" className="classic-gps-here mx-3 mt-3 rounded-xl border border-amber-300 bg-amber-50 p-3 text-[11.5px] text-amber-900">
+        <div className="flex items-start gap-2">
+          <MapPin size={18} className="mt-0.5 shrink-0 text-amber-600" />
+          <div className="min-w-0 flex-1">
+            <div className="font-bold">موقعیت این ساختمان ثبت نشده است</div>
+            <div className="mt-0.5 text-[10.5px] leading-5">اگر همین حالا در محل ساختمان هستید، یک‌بار بزنید تا دفعهٔ بعد روی نقشهٔ «نزدیک من» و مسیریابی بیاید.</div>
+            {hereStatus?.contractId === contract.id && <div role="status" className="mt-1 text-[10.5px] font-bold leading-5 text-red-600">{hereStatus.text}</div>}
+          </div>
+        </div>
+        <button
+          type="button"
+          disabled={hereBusy}
+          onClick={() => void registerPositionHere(contract)}
+          className="mt-2 w-full rounded-lg bg-amber-600 py-2.5 text-[12px] font-bold text-white disabled:opacity-60"
+        >
+          {hereBusy ? "در حال دریافت موقعیت دقیق…" : "ثبت موقعیت همین‌جا"}
+        </button>
+      </div>
+    );
+  };
 
   const renderWorkView = () => {
     const items = checklist.filter((i) => i.deviceType === "آسانسور");
@@ -1874,6 +1968,7 @@ export default function TechnicianMobileApp({
       <>
         {header("انجام سرویس", () => setScreen("job"))}
         {timerBar()}
+        {selected && gpsHereCard(selected.contract)}
         <div className="flex bg-white text-[12.5px]">
           {[
             ["checklist", "چک‌لیست", ClipboardCheck],
@@ -2166,7 +2261,7 @@ export default function TechnicianMobileApp({
       {timerBar()}
       <div className="p-3 pb-20">
         <div className="flex items-center justify-between rounded-xl bg-blue-50 p-3 text-[12.5px] text-blue-800">
-          <span>زمان صرف شده: <b className="font-mono">{fmtDur(jobSec)}</b></span>
+          <span>زمان صرف شده: <b className="font-mono"><LiveTicker render={(now) => fmtDur(secondsSince(jobStart, now))} /></b></span>
           <span className="flex items-center gap-1"><Clock size={13} /> شروع از ساعت {jobStartClock}</span>
         </div>
         <div className="mt-3 grid grid-cols-2 gap-2">
@@ -2413,8 +2508,8 @@ export default function TechnicianMobileApp({
                 <div className="text-[13px] font-bold text-gray-800">{draft.customerName}</div>
                 <div className="mt-1 text-[10.5px] text-gray-500">{draft.doneDate} · {draft.inTime} تا {draft.outTime}</div>
               </div>
-              <span className={`rounded-full px-2 py-1 text-[9.5px] font-bold ${navigator.onLine ? "bg-emerald-100 text-emerald-700" : "bg-gray-100 text-gray-600"}`}>
-                {navigator.onLine ? "آماده انتقال" : "منتظر اینترنت"}
+              <span className={`rounded-full px-2 py-1 text-[9.5px] font-bold ${browserHasInternet ? "bg-emerald-100 text-emerald-700" : "bg-gray-100 text-gray-600"}`}>
+                {browserHasInternet ? "آماده انتقال" : "منتظر اینترنت"}
               </span>
             </div>
             <label className="mt-3 block text-[10.5px] text-gray-500">این گزارش متعلق به کدام سرویس است؟</label>
@@ -2433,7 +2528,7 @@ export default function TechnicianMobileApp({
             <button
               type="button"
               onClick={() => attachOfflineDraft(draft)}
-              disabled={!navigator.onLine || !draftMappings[draft.id]}
+              disabled={!browserHasInternet || !draftMappings[draft.id]}
               className="mt-2 flex w-full items-center justify-center gap-1.5 rounded-lg bg-emerald-600 py-2.5 text-[12px] font-bold text-white disabled:bg-gray-300"
             >
               <Cloud size={15} /> اتصال به سرویس و ثبت آنلاین
@@ -3484,13 +3579,15 @@ export default function TechnicianMobileApp({
   const stats = useMemo(() => {
     let done = 0;
     let faultsDone = 0;
+    if (!drawer) return { done, faultsDone }; // این آمار فقط داخل منوی کناری دیده می‌شود
     contracts.forEach((c) => {
       const d = appStore.getContractDetails(c.id);
       done += d.months.filter((m) => m.done).length;
       faultsDone += (d.breakdowns || []).filter((b) => b.status === "انجام شده").length;
     });
     return { done, faultsDone };
-  }, [contracts, screen]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- detailsRevision فقط «کلید تازه‌سازی» است: با هر تغییر جزئیات قراردادها دوباره ساخته شود
+  }, [contracts, detailsRevision, drawer]);
 
   const renderDrawer = () =>
     drawer ? (
@@ -3507,12 +3604,12 @@ export default function TechnicianMobileApp({
             </span>
           </div>
           <div className="grid grid-cols-2 gap-2 p-3">
-            {[
-              ["ساعت کار امروز", fmtDur(daySec)],
-              [`ساعت کار ${currentMonthInfo.monthName}`, formatDurationPersian(currentMonthSec)],
+            {([
+              ["ساعت کار امروز", <LiveTicker key="day" render={(now) => fmtDur(secondsSince(dayStart, now))} />],
+              [`ساعت کار ${currentMonthInfo.monthName}`, <LiveTicker key="month" render={(now) => formatDurationPersian(monthBaseSec + (dayStart ? Math.min(secondsSince(dayStart, now), MAX_WORK_SESSION_SECONDS) : 0))} />],
               ["سرویس‌های این ماه", fa(stats.done)],
               ["خرابی‌های این ماه", fa(stats.faultsDone)],
-            ].map(([k, v]) => (
+            ] as Array<[string, ReactNode]>).map(([k, v]) => (
               <div key={k} className="rounded-lg bg-gray-50 p-2 text-center">
                 <div className="text-[13.5px] font-bold text-gray-800">{v}</div>
                 <div className="text-[10px] text-gray-500">{k}</div>
