@@ -27,6 +27,10 @@ for (const width of [360, 390, 480]) {
     await expect(page.getByText('کار فعالی ندارید', {exact:true})).toBeVisible();
     await expect(page.getByText(/کارهای تاریخ گذشته/)).toBeVisible();
     await expect(page.locator('.classic-home-actions > button')).toHaveCount(3);
+    await expect(page.locator('.classic-home-extra > button')).toHaveCount(4);
+    await expect(page.getByRole('button',{name:'کلید سه‌گوش',exact:true})).toBeVisible();
+    await expect(page.locator('.classic-job-row').first()).toContainText('سرویس فروردین 1404');
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await expect(page.locator('body')).not.toContainText('زمان دستگاه نیاز به هماهنگی دارد');
     await page.locator('.classic-job-row').first().click();
     await expect(page.getByRole('heading', {name:'اطلاعات سرویس ساختمان آزمایشی'})).toBeVisible();
@@ -50,8 +54,8 @@ for (const width of [360, 390, 480]) {
     await expect(page.locator('.classic-calendar button[aria-pressed=true]')).toHaveCount(1);
     if (width === 390) await page.screenshot({path:'test-results/classic-calendar.png',fullPage:true});
     await nav.getByRole('button',{name:'خانه',exact:true}).click();
-    await page.getByRole('button',{name:'نمایش سایر امکانات',exact:true}).click();
     await expect(page.getByRole('button',{name:'کلید سه‌گوش',exact:true})).toBeVisible();
+    await page.getByRole('button',{name:'نمایش سایر امکانات',exact:true}).click();
     await expect(page.getByRole('button',{name:'ثبت سرویس آفلاین',exact:true})).toBeVisible();
     expect(errors).toEqual([]);
   });

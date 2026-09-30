@@ -19,7 +19,13 @@
 .classic-home-actions { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; padding:8px 12px; }
 .classic-home-actions > button { min-height:90px; border:1px solid #d0d0d4; border-radius:12px; box-shadow:none; gap:8px; }
 .classic-home-actions > button > svg { width:30px; height:30px; }
-.classic-home-actions > button > span { font-size:13px; }
+.classic-home-actions > button > .classic-action-label { font-size:13px; }
+.classic-home-extra { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:8px; padding:2px 12px 10px; }
+.classic-home-extra.is-three { grid-template-columns:repeat(3,minmax(0,1fr)); }
+.classic-home-extra > button { min-height:78px; border:1px solid #d0d0d4; border-radius:12px; box-shadow:none; gap:6px; padding:8px 3px; }
+.classic-home-extra > button > svg { width:24px; height:24px; }
+.classic-home-extra .classic-action-label { font-size:11px; line-height:1.55; }
+.classic-badge { min-width:18px; text-align:center; font-size:10px; line-height:17px; }
 .classic-active-work { border-radius:0!important; padding:22px 12px!important; box-shadow:none!important; margin-top:16px; }
 .classic-section-title { display:flex; justify-content:space-between; align-items:center; padding:20px 12px 12px; font-size:19px; font-weight:400; }
 .classic-job-row { display:flex; align-items:center; gap:10px; padding:10px 12px; width:100%; text-align:right; border:1px solid #d6d6d9; border-top:0; background:white; min-height:70px; }
@@ -28,8 +34,10 @@
 .classic-elevator { width:29px; height:32px; border-radius:5px; background:#d2d2d0; color:#151515; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
 .classic-job-date { font-size:11px; max-width:85px; flex-shrink:0; text-align:left; }
 .classic-job-date.is-overdue { color:#b44848; }
-.classic-job-status { display:flex; flex-wrap:wrap; gap:4px; font-size:9px; margin-top:4px; }
-.classic-job-status > span:first-child { display:none; }
+.classic-job-status { display:flex; flex-wrap:wrap; align-items:center; gap:4px; font-size:10.5px; margin-top:4px; }
+/* سرویسِ ماه (مثلاً «سرویس مهر ۱۴۰۵») قبلاً دیده می‌شد؛ به‌صورت متن ساده و کم‌رنگ کنار وضعیت می‌ماند. */
+.classic-job-status > span:first-child { background:transparent!important; padding-inline:0!important; color:#777!important; }
+.classic-job-status > span:first-child::after { content:" ·"; }
 .classic-bottom-nav { position:fixed; inset-inline:0; bottom:0; z-index:40; margin:auto; max-width:480px; display:flex; justify-content:space-around; background:#eeeff3; border-top:1px solid #d1d2d8; padding:10px 0 calc(10px + env(safe-area-inset-bottom)); }
 .classic-bottom-nav button { min-width:70px; min-height:52px; color:#484b54; font-size:12px; gap:6px; }
 .classic-bottom-nav button svg { width:25px; height:25px; }

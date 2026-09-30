@@ -171,6 +171,9 @@ const MAX_WORK_SESSION_SECONDS = 12 * 60 * 60;
 type Job = { contract: Contract; month: MonthService; overdue: boolean };
 type Screen = "home" | "job" | "work" | "report" | "sign" | "map" | "calendar" | "services" | "triangleKeys" | "technicianParts" | "dailyDispatch" | "myAssignedJobs" | "dailyReports" | "offlineService" | "offlineQueue";
 
+// کارت‌های دسترسی سریع صفحهٔ خانه؛ هر امکان قبلی باید دست‌کم یک مسیر دیده‌شدنی داشته باشد.
+type HomeAction = { l: string; i: any; c: string; badge?: number; go: () => void };
+
 type OfflineServiceDraft = {
   id: string;
   customerName: string;
@@ -1002,6 +1005,15 @@ export default function TechnicianMobileApp({
     if (!year || !month || month > 12 || !day) return value || "ثبت نشده";
     return `${fa(day)} ${JALALI_MONTH_NAMES[month - 1]} ${String(year).replace(/\d/g, d => "۰۱۲۳۴۵۶۷۸۹"[Number(d)])}`;
   };
+  // وضعیت آفلاین: تعداد سرویس‌های داخل صف امن دستگاه هرگز نباید پنهان شود.
+  const offlineNoticeLines = [
+    ...(sync.offlineServicesCount > 0 ? [`${fa(sync.offlineServicesCount)} سرویس در صف امن دستگاه؛ پس از اتصال سرور ارسال می‌شود`] : []),
+    ...(sync.isManualOffline
+      ? ["حالت آفلاین دستی فعال است. اطلاعات روی گوشی محفوظ است؛ برای ارسال، همگام‌سازی را فعال کنید."]
+      : !browserHasInternet
+      ? ["همگام‌سازی اطلاعات انجام نشده است. لطفاً به اینترنت متصل شوید و روی دکمه‌ی زیر کلیک کنید.", "اینترنت دستگاه قطع است — می‌توانید سرویس را ثبت کنید"]
+      : []),
+  ];
   const header = (title?: string, back?: () => void) => (
     <header className="classic-header">
       <div className="classic-toolbar">
@@ -1015,9 +1027,7 @@ export default function TechnicianMobileApp({
         </button>
       </div>
       {isOffline && <div className="classic-sync-notice">
-        <div><Clock size={25}/><p>{sync.isManualOffline
-          ? "حالت آفلاین دستی فعال است. اطلاعات روی گوشی محفوظ است؛ برای ارسال، همگام‌سازی را فعال کنید."
-          : "همگام‌سازی اطلاعات انجام نشده است. لطفاً به اینترنت متصل شوید و روی دکمه‌ی زیر کلیک کنید."}</p></div>
+        <div><Clock size={25}/><div>{offlineNoticeLines.map((line) => <p key={line}>{line}</p>)}</div></div>
         <button type="button" onClick={handleManualSync}>همگام سازی</button>
       </div>}
       <details className="classic-tools">
@@ -1076,39 +1086,54 @@ export default function TechnicianMobileApp({
 
   const [allTodayVisible, setAllTodayVisible] = useState(false);
   const [allPastVisible, setAllPastVisible] = useState(false);
+  const renderHomeActions = () => {
+    const primary: HomeAction[] = [
+      { l: "لیست خرابی", i: AlertTriangle, c: "text-red-500", go: () => setScreen("services") },
+      { l: "ثبت خرابی", i: Plus, c: "text-orange-500", go: () => { setScreen("services"); notify("ساختمان موردنظر را انتخاب کنید؛ پس از شروع سرویس، بخش «خرابی‌ها» در دسترس است."); } },
+      { l: "ثبت سرویس", i: Wrench, c: "text-blue-600", go: () => setScreen("services") },
+    ];
+    // امکاناتی که قبلاً در صفحهٔ خانه یا نوار پایین بودند (از جمله کلید سه‌گوش) پنهان نمی‌شوند؛
+    // نوار پایین مثل نمونه چهار گزینه دارد و این‌ها زیر سه اقدام اصلی همیشه دیده می‌شوند.
+    const quick: HomeAction[] = [
+      { l: "کلید سه‌گوش", i: KeyRound, c: "text-gray-600", go: () => setScreen("triangleKeys") },
+      { l: "کارهای واگذارشده من", i: ClipboardList, c: "text-emerald-600", badge: myDailyAssignments.length || undefined, go: () => setScreen("myAssignedJobs") },
+      { l: "گزارش روزانه من", i: FileBarChart2, c: "text-indigo-600", badge: (selectedDailyReportJobs.length + selectedDailyBreakdowns.length) || undefined, go: () => { setDailyReportDate(myReportDates[0] || currentJalaliDate); setScreen("dailyReports"); } },
+      ...(canDispatchServices ? [{ l: "تقسیم کار روزانه", i: Send, c: "text-blue-600", go: () => setScreen("dailyDispatch" as Screen) }] : []),
+    ];
+    const more: HomeAction[] = [
+      { l: "ثبت سرویس آفلاین", i: CloudOff, c: "text-amber-600", go: () => setScreen("offlineService") },
+      { l: "صف سرویس‌های آفلاین", i: Cloud, c: "text-emerald-600", badge: offlineDrafts.length || undefined, go: () => setScreen("offlineQueue") },
+      { l: "قطعات تحویلی من", i: Package, c: "text-violet-600", badge: myPartDeliveries.length || undefined, go: () => setScreen("technicianParts") },
+    ];
+    const card = (b: HomeAction) => (
+      <button
+        key={b.l}
+        type="button"
+        onClick={b.go}
+        className="relative flex min-h-16 flex-col items-center justify-center gap-1 rounded-xl bg-white px-1 py-2 shadow-sm active:bg-gray-50"
+      >
+        <b.i size={20} className={b.c} />
+        <span className="classic-action-label text-center text-[10px] leading-4 text-gray-700">{b.l}</span>
+        {b.badge ? (
+          <span className="classic-badge absolute right-2 top-2 rounded-full bg-red-500 px-1.5 text-[10px] text-white">
+            {fa(b.badge)}
+          </span>
+        ) : null}
+      </button>
+    );
+    return (
+      <>
+        <div className="classic-home-actions">{primary.map(card)}</div>
+        <div className="classic-home-extra">{quick.map(card)}</div>
+        {homeMore && <div className="classic-home-extra is-three">{more.map(card)}</div>}
+        <button type="button" onClick={()=>setHomeMore(value=>!value)} aria-expanded={homeMore} className="mx-3 mb-2 w-[calc(100%-1.5rem)] rounded-lg border border-gray-200 bg-white py-2 text-[11px] font-bold text-gray-500">{homeMore?"نمایش گزینه‌های کمتر":"نمایش سایر امکانات"}</button>
+      </>
+    );
+  };
   const renderHomeView = () => (
     <>
-      {header()}
-      <div className="classic-home-actions">
-        {[
-          { l: "لیست خرابی", i: AlertTriangle, c: "text-red-500", go: () => setScreen("services") },
-          { l: "ثبت خرابی", i: Plus, c: "text-orange-500", go: () => { setScreen("services"); notify("ساختمان موردنظر را انتخاب کنید؛ پس از شروع سرویس، بخش «خرابی‌ها» در دسترس است."); } },
-          { l: "کلید سه‌گوش", i: KeyRound, c: "text-gray-600", go: () => setScreen("triangleKeys") },
-          { l: "ثبت سرویس", i: Wrench, c: "text-blue-600", go: () => setScreen("services") },
-          { l: "ثبت سرویس آفلاین", i: CloudOff, c: "text-amber-600", go: () => setScreen("offlineService") },
-          { l: "صف سرویس‌های آفلاین", i: Cloud, c: "text-emerald-600", badge: offlineDrafts.length || undefined, go: () => setScreen("offlineQueue") },
-          { l: "قطعات تحویلی من", i: Package, c: "text-violet-600", badge: myPartDeliveries.length || undefined, go: () => setScreen("technicianParts") },
-          { l: "کارهای واگذارشده من", i: ClipboardList, c: "text-emerald-600", badge: myDailyAssignments.length || undefined, go: () => setScreen("myAssignedJobs") },
-          { l: "گزارش روزانه من", i: FileBarChart2, c: "text-indigo-600", badge: (selectedDailyReportJobs.length + selectedDailyBreakdowns.length) || undefined, go: () => { setDailyReportDate(myReportDates[0] || currentJalaliDate); setScreen("dailyReports"); } },
-          ...(canDispatchServices ? [{ l: "تقسیم کار روزانه", i: Send, c: "text-blue-600", badge: undefined, go: () => setScreen("dailyDispatch" as Screen) }] : []),
-        ].filter(b => homeMore || ["ثبت سرویس","لیست خرابی","ثبت خرابی"].includes(b.l)).map((b) => (
-          <button
-            key={b.l}
-            type="button"
-            onClick={b.go}
-            className="relative flex min-h-16 flex-col items-center justify-center gap-1 rounded-xl bg-white px-1 py-2 shadow-sm active:bg-gray-50"
-          >
-            <b.i size={20} className={b.c} />
-            <span className="text-center text-[10px] leading-4 text-gray-700">{b.l}</span>
-            {b.badge ? (
-              <span className="absolute right-2 top-2 rounded-full bg-red-500 px-1.5 text-[10px] text-white">
-                {fa(b.badge)}
-              </span>
-            ) : null}
-          </button>
-        ))}
-      </div>
-      <button type="button" onClick={()=>setHomeMore(value=>!value)} className="mx-3 mb-2 w-[calc(100%-1.5rem)] rounded-lg border border-gray-200 bg-white py-2 text-[11px] font-bold text-gray-500">{homeMore?"نمایش گزینه‌های کمتر":"نمایش سایر امکانات"}</button>
+      {header(todayJalali())}
+      {renderHomeActions()}
 
       <div className={`classic-active-work mx-3 rounded-xl p-3 text-center text-[12.5px] shadow-sm ${jobStart && selected ? "border border-blue-500 bg-gradient-to-l from-blue-600 to-blue-500 text-white" : "border border-dashed border-gray-300 bg-white text-gray-500"}`}>
         {jobStart && selected ? (
@@ -3176,7 +3201,7 @@ export default function TechnicianMobileApp({
     };
     return (
       <>
-        {header("محل کلید سه‌گوش", () => setScreen("services"))}
+        {header("محل کلید سه‌گوش", () => setScreen("home"))}
         <div className="p-3 pb-24">
           <div className="rounded-2xl border border-red-100 bg-white p-3 shadow-sm">
             <div className="mb-3 flex items-center gap-2 text-[13px] font-bold text-gray-800"><KeyRound size={19} className="text-red-500" /> جستجوی سریع کلید نجات اضطراری</div>
