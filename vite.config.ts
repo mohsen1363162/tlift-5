@@ -33,8 +33,8 @@ export default defineConfig({
       ],
       manifest: {
         id: "/asemansara-app-v3",
-        name: "آسمانسرا",
-        short_name: "آسمانسرا",
+        name: "T_lift",
+        short_name: "T_lift",
         description: "نرم‌افزار مستقل خدمات و مدیریت آسانسور آسمانسرا",
         theme_color: "#2563eb",
         background_color: "#1e293b",

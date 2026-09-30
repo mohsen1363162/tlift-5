@@ -497,10 +497,12 @@ export default function App() {
           <button
             type="button"
             onClick={() => setAndroidModal(true)}
-            title="نصب برنامه مستقل آسمانسرا روی گوشی"
-            className="flex items-center gap-1 rounded bg-emerald-600 px-2.5 py-1 text-[11.5px] font-medium text-white hover:bg-emerald-700 shadow-sm transition"
+            title="نصب برنامه مستقل T_lift روی گوشی و کامپیوتر"
+            aria-label="نصب برنامه T_lift"
+            className="flex items-center gap-1.5 rounded-lg bg-white py-0.5 pl-2.5 pr-1 text-[12px] font-bold text-neutral-800 shadow-sm ring-1 ring-neutral-300 transition hover:bg-neutral-50"
           >
-            <Smartphone size={13} /> نصب برنامه آسمانسرا
+            <img src="/icons/icon-192.png" alt="" width={24} height={24} className="h-6 w-6 rounded-md" />
+            <span dir="ltr">T_lift</span>
           </button>
 
           <button

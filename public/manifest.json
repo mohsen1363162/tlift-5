@@ -1,7 +1,7 @@
 {
   "id": "/asemansara-app-v3",
-  "name": "آسمانسرا",
-  "short_name": "آسمانسرا",
+  "name": "T_lift",
+  "short_name": "T_lift",
   "description": "نرم‌افزار مستقل خدمات و مدیریت آسانسور آسمانسرا",
   "start_url": "/?mode=mobile",
   "scope": "/",

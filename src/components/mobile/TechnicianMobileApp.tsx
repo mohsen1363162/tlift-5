@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Menu,
   Play,
+  Pause,
   Square,
   AlertTriangle,
   Plus,
@@ -153,6 +154,13 @@ const jalaliDateTimestamp = (value: string) => {
   return new Date(gy, gm - 1, gd).setHours(0, 0, 0, 0);
 };
 
+// شماره‌های ثبت‌شده ممکن است ارقام فارسی، فاصله یا خط تیره داشته باشند؛ شماره‌گیر فقط رقم انگلیسی را می‌فهمد.
+const dialNumber = (value?: string) =>
+  String(value || "")
+    .replace(/[۰-۹]/g, (d) => String("۰۱۲۳۴۵۶۷۸۹".indexOf(d)))
+    .replace(/[٠-٩]/g, (d) => String("٠١٢٣٤٥٦٧٨٩".indexOf(d)))
+    .replace(/[^\d+]/g, "");
+
 const nowTime = () => {
   const d = new Date();
   return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
@@ -268,6 +276,7 @@ export default function TechnicianMobileApp({
   });
   const [draftMappings, setDraftMappings] = useState<Record<string, string>>({});
   const [navTarget, setNavTarget] = useState<{ building: string; address?: string; lat: number; lng: number } | null>(null);
+  const [callContract, setCallContract] = useState<Contract | null>(null);
 
   const openNavigation = (target: { building: string; address?: string; lat: number; lng: number }) => {
     setNavTarget(target);
@@ -781,6 +790,26 @@ export default function TechnicianMobileApp({
     if (!dayStart) toggleDay();
   };
 
+  // سرویسی که همین همکار شروع کرده و هنوز پایان نداده است؛ دکمهٔ آن باید «در حال انجام» نشان دهد، نه «شروع».
+  const isMyActiveService = (j: Job) =>
+    activeServiceAssignments.some(
+      (item) => item.technicianName === technician.name && item.contractId === j.contract.id && item.monthId === j.month.id
+    );
+
+  // ادامهٔ سرویس در حال انجام: بدون شروع دوباره و بدون بررسی مجدد GPS (زمان شروع همان زمان ثبت‌شده می‌ماند).
+  const continueService = (j: Job) => {
+    const active = activeServiceAssignments.find(
+      (item) => item.technicianName === technician.name && item.contractId === j.contract.id && item.monthId === j.month.id
+    );
+    setIsAdhocOfflineService(false);
+    setSelected(j);
+    if (active) {
+      setJobStart(active.startedAt);
+      setJobStartClock(new Date(active.startedAt).toLocaleTimeString("fa-IR", { hour: "2-digit", minute: "2-digit" }));
+    }
+    setScreen("work");
+  };
+
   const finishService = (reviewConfirmed = false) => {
     if (!selected) return;
     if (jobSec >= 2 * 60 * 60 && !reviewConfirmed) {
@@ -1034,7 +1063,7 @@ export default function TechnicianMobileApp({
         <summary>ابزارهای همگام‌سازی و برنامه</summary>
         <div><SyncIndicator variant="mobile" onShowToast={notify}/>
           <button type="button" onClick={handleAppUpdate} disabled={updatingApp}>بروزرسانی نرم‌افزار (v{APP_VERSION})</button>
-          <button type="button" onClick={() => setAndroidModal(true)}>نصب برنامه</button>
+          <button type="button" onClick={() => setAndroidModal(true)} aria-label="نصب برنامه T_lift" title="نصب برنامه مستقل T_lift" className="classic-install"><img src="/icons/icon-192.png" alt="" width={22} height={22}/><span dir="ltr">T_lift</span></button>
         </div>
       </details>
     </header>
@@ -1557,11 +1586,11 @@ export default function TechnicianMobileApp({
                 <div className="mt-2.5 flex items-center justify-center gap-2">
                   <button
                     type="button"
-                    onClick={() => startService(selected)}
+                    onClick={() => (isMyActiveService(selected) ? continueService(selected) : startService(selected))}
                     className="flex-1 flex items-center justify-center gap-1.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 py-1.5 text-[11px] font-black text-white shadow-lg hover:from-emerald-600 hover:to-teal-600 active:scale-95 transition"
                   >
-                    <Play size={12} fill="white" />
-                    <span>ورود و شروع سرویس</span>
+                    {isMyActiveService(selected) ? <Pause size={12} fill="white" /> : <Play size={12} fill="white" />}
+                    <span>{isMyActiveService(selected) ? "ادامه سرویس در حال انجام" : "ورود و شروع سرویس"}</span>
                   </button>
                   <button
                     type="button"
@@ -1579,11 +1608,12 @@ export default function TechnicianMobileApp({
         <div className="classic-map-actions -mt-7 flex items-end justify-around px-2 relative z-10">
           {round(ImageIcon, "تصاویر", "bg-gray-500", () => setContractInfoView("photos"))}
           {round(Phone, "تماس", "bg-sky-600", () => {
-            const phone = c.coordinatorPhone || c.phone;
-            if (phone) window.location.href = `tel:${phone}`;
+            if (dialNumber(c.coordinatorPhone) || dialNumber(c.phone)) setCallContract(c);
             else notify("شماره مسئول هماهنگی ثبت نشده است");
           })}
-          {round(Play, "شروع سرویس", "bg-emerald-600", () => startService(selected), true)}
+          {isMyActiveService(selected)
+            ? round(Pause, "در حال انجام", "bg-emerald-600", () => continueService(selected), true)
+            : round(Play, "شروع سرویس", "bg-emerald-600", () => startService(selected), true)}
           {round(Navigation, "مسیریابی", "bg-violet-600", () =>
             openNavigation({ building: c.building, address: c.address, lat: targetLat, lng: targetLng })
           )}
@@ -2571,7 +2601,7 @@ export default function TechnicianMobileApp({
                         <span>مدیر: {c.manager}</span>
                         {(c.coordinatorPhone || c.phone) && (
                           <a
-                            href={`tel:${c.coordinatorPhone || c.phone}`}
+                            href={`tel:${dialNumber(c.coordinatorPhone) || dialNumber(c.phone)}`}
                             className="inline-flex items-center gap-0.5 text-sky-600 font-mono hover:underline"
                             onClick={(e) => e.stopPropagation()}
                           >
@@ -2607,11 +2637,11 @@ export default function TechnicianMobileApp({
                 <div className="mt-3 flex items-center gap-2">
                   <button
                     type="button"
-                    onClick={() => startService(targetJob)}
+                    onClick={() => (isMyActiveService(targetJob) ? continueService(targetJob) : startService(targetJob))}
                     className="flex-1 flex items-center justify-center gap-1.5 rounded-xl bg-emerald-600 py-2.5 px-3 text-[12px] font-bold text-white shadow-xs hover:bg-emerald-700 active:scale-95 transition"
                   >
-                    <Play size={15} className="fill-white" />
-                    <span>شروع سرویس خارج از نوبت ({targetMonth.m})</span>
+                    {isMyActiveService(targetJob) ? <Pause size={15} className="fill-white" /> : <Play size={15} className="fill-white" />}
+                    <span>{isMyActiveService(targetJob) ? `ادامه سرویس در حال انجام (${targetMonth.m})` : `شروع سرویس خارج از نوبت (${targetMonth.m})`}</span>
                   </button>
 
                   <button
@@ -3141,11 +3171,11 @@ export default function TechnicianMobileApp({
               {/* 1. Start Service Out-of-turn */}
               <button
                 type="button"
-                onClick={() => startService(selectedItem.targetJob)}
+                onClick={() => (isMyActiveService(selectedItem.targetJob) ? continueService(selectedItem.targetJob) : startService(selectedItem.targetJob))}
                 className="col-span-2 flex items-center justify-center gap-1.5 rounded-xl bg-emerald-600 py-2.5 px-3 text-[12px] font-bold text-white shadow-xs hover:bg-emerald-700 active:scale-95 transition"
               >
-                <Play size={15} className="fill-white" />
-                <span>شروع سرویس ({selectedItem.nextMonth.m})</span>
+                {isMyActiveService(selectedItem.targetJob) ? <Pause size={15} className="fill-white" /> : <Play size={15} className="fill-white" />}
+                <span>{isMyActiveService(selectedItem.targetJob) ? `ادامه سرویس در حال انجام (${selectedItem.nextMonth.m})` : `شروع سرویس (${selectedItem.nextMonth.m})`}</span>
               </button>
 
               {/* 2. Navigation */}
@@ -3405,7 +3435,7 @@ export default function TechnicianMobileApp({
             ],
             [
               Smartphone,
-              "نصب برنامه مستقل «آسمانسرا» روی صفحه اصلی گوشی",
+              "نصب برنامه مستقل «T_lift» روی صفحه اصلی گوشی",
               () => {
                 setDrawer(false);
                 setAndroidModal(true);
@@ -3510,6 +3540,55 @@ export default function TechnicianMobileApp({
         </div>
       </div>
     ) : null;
+
+  const renderCallSheet = () => {
+    if (!callContract) return null;
+    const c = callContract;
+    const coordinatorDial = dialNumber(c.coordinatorPhone);
+    const managerDial = dialNumber(c.phone);
+    type CallRow = { key: string; role: string; name?: string; shown: string; dial: string };
+    const rows: CallRow[] = [];
+    if (coordinatorDial) rows.push({ key: "coordinator", role: "مسئول هماهنگی", name: c.coordinator, shown: String(c.coordinatorPhone), dial: coordinatorDial });
+    if (managerDial && managerDial !== coordinatorDial) rows.push({ key: "manager", role: "مدیر / کارفرما", name: c.manager, shown: String(c.phone), dial: managerDial });
+    const copyNumber = async (value: string) => {
+      try { await navigator.clipboard.writeText(value); notify("شماره کپی شد"); } catch { notify(value); }
+    };
+    return (
+      <div className="fixed inset-0 z-[80] flex items-end justify-center bg-black/60 p-3 sm:items-center" onClick={() => setCallContract(null)}>
+        <div role="dialog" aria-label="تماس با مسئول هماهنگی" className="w-full max-w-md overflow-hidden rounded-2xl bg-white shadow-2xl" onClick={(event) => event.stopPropagation()}>
+          <div className="flex items-center justify-between border-b px-4 py-3">
+            <div>
+              <div className="text-[14px] font-bold text-gray-800">تماس با مسئول هماهنگی</div>
+              <div className="max-w-[280px] truncate text-[11px] text-gray-500">{c.building.replace(/^\*\s*/, "")}</div>
+            </div>
+            <button type="button" aria-label="بستن" onClick={() => setCallContract(null)} className="rounded-full bg-gray-100 p-2 text-gray-600 hover:bg-gray-200"><X size={16} /></button>
+          </div>
+          <div className="space-y-2.5 p-4">
+            {!coordinatorDial && (
+              <div className="rounded-xl border border-amber-200 bg-amber-50 p-2.5 text-[11.5px] text-amber-900">شماره مسئول هماهنگی برای این ساختمان ثبت نشده است؛ شماره‌های زیر از اطلاعات قرارداد هستند.</div>
+            )}
+            {rows.map((row, index) => (
+              <div key={row.key} className={`rounded-xl border p-3 ${index === 0 && coordinatorDial ? "border-emerald-300 bg-emerald-50" : "border-gray-200 bg-white"}`}>
+                <div className="flex items-center justify-between gap-2 text-[11.5px] text-gray-600">
+                  <span className="font-bold text-gray-800">{row.role}</span>
+                  <span className="truncate">{row.name || "نام ثبت نشده"}</span>
+                </div>
+                <div dir="ltr" className="my-2 text-center font-mono text-[20px] font-bold tracking-wide text-gray-900">{row.shown}</div>
+                <div className="grid grid-cols-[1fr_auto] gap-2">
+                  <a href={`tel:${row.dial}`} className="flex items-center justify-center gap-1.5 rounded-xl bg-emerald-600 py-2.5 text-[13px] font-bold text-white active:scale-95">
+                    <Phone size={16} /> تماس
+                  </a>
+                  <button type="button" onClick={() => copyNumber(row.shown)} className="flex items-center justify-center gap-1 rounded-xl border bg-white px-4 text-[12px] text-gray-700">
+                    <Copy size={14} /> کپی
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  };
 
   const renderNavModal = () => {
     if (!navTarget) return null;
@@ -3671,6 +3750,7 @@ export default function TechnicianMobileApp({
         {renderDurationReviewModal()}
         {renderPayModal()}
         {renderNavModal()}
+        {renderCallSheet()}
         {locationDraft && (
           <div className="fixed inset-0 z-[75] flex items-end justify-center bg-black/55 p-3 sm:items-center">
             <div className="w-full max-w-md overflow-hidden rounded-2xl bg-white shadow-2xl">

@@ -78,12 +78,10 @@ export default function AndroidAppModal({
         {/* Header */}
         <div className="flex items-center justify-between border-b pb-3 border-neutral-100 dark:border-neutral-800">
           <div className="flex items-center gap-2.5">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
-              <Smartphone size={24} />
-            </div>
+            <img src="/icons/icon-192.png" alt="T_lift" width={40} height={40} className="h-10 w-10 rounded-xl shadow-sm" />
             <div>
               <h2 className="text-base font-bold text-neutral-900 dark:text-white flex items-center gap-1.5">
-                <span>برنامه آسمانسرا</span>
+                <span>برنامه <span dir="ltr">T_lift</span></span>
                 <span className="rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 px-2 py-0.5 text-[11px] font-medium">
                   نرم‌افزار مستقل گوشی
                 </span>
@@ -92,7 +90,7 @@ export default function AndroidAppModal({
                 </span>
               </h2>
               <p className="text-[12px] text-neutral-500 dark:text-neutral-400">
-                اپلیکیشن اختصاصی آسمانسرا بدون نوار مرورگر و با آیکون مستقل روی صفحه اصلی
+                اپلیکیشن اختصاصی T_lift (شرکت آسمانسرا) بدون نوار مرورگر و با آیکون مستقل روی صفحه اصلی
               </p>
             </div>
           </div>
@@ -111,15 +109,15 @@ export default function AndroidAppModal({
           <div className="rounded-2xl border-2 border-emerald-500/30 bg-emerald-50/70 p-4 dark:border-emerald-500/30 dark:bg-emerald-950/30 space-y-3">
             <div className="flex items-center gap-2 font-bold text-emerald-900 dark:text-emerald-200 text-[14px]">
               <ShieldCheck size={22} className="text-emerald-600 dark:text-emerald-400" />
-              <span>نصب برنامه اختصاصی آسمانسرا روی گوشی</span>
+              <span>نصب برنامه اختصاصی T_lift روی گوشی</span>
             </div>
             <p className="text-[12px] leading-relaxed text-emerald-950/80 dark:text-emerald-300/90">
-              این برنامه مانند برنامه‌های بازار، باد صبا و لارک پلیر به عنوان یک <strong>نرم‌افزار مستقل با نام «آسمانسرا»</strong> روی صفحه اصلی نصب می‌شود. پس از نصب، هیچ نوار آدرس یا علامت کروم نخواهد داشت و به صورت تمام‌صفحه و آفلاین کار می‌کند.
+              این برنامه مانند برنامه‌های بازار، باد صبا و لارک پلیر به عنوان یک <strong>نرم‌افزار مستقل با نام «T_lift»</strong> روی صفحه اصلی نصب می‌شود. پس از نصب، هیچ نوار آدرس یا علامت کروم نخواهد داشت و به صورت تمام‌صفحه و آفلاین کار می‌کند.
             </p>
             {isInstalled ? (
               <div className="rounded-xl bg-emerald-600 px-3 py-3 text-center font-bold text-white shadow-sm flex items-center justify-center gap-2">
                 <Check size={18} />
-                <span>برنامه آسمانسرا روی این گوشی نصب است و به صورت نرم‌افزار مستقل اجرا می‌شود</span>
+                <span>برنامه T_lift روی این گوشی نصب است و به صورت نرم‌افزار مستقل اجرا می‌شود</span>
               </div>
             ) : isInstallable ? (
               <button
@@ -129,7 +127,7 @@ export default function AndroidAppModal({
                 className="flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 py-3.5 font-bold text-white shadow-lg hover:bg-emerald-700 active:scale-95 transition disabled:opacity-60"
               >
                 <Download size={20} />
-                <span>{installing ? "در حال افزودن و نصب آسمانسرا..." : "نصب فوری «آسمانسرا» روی صفحه اصلی"}</span>
+                <span>{installing ? "در حال افزودن و نصب T_lift..." : "نصب فوری «T_lift» روی صفحه اصلی"}</span>
               </button>
             ) : (
               <div className="rounded-xl bg-white/90 p-3 text-[12px] leading-6 dark:bg-neutral-900/80 space-y-1.5 border border-emerald-200 dark:border-emerald-900">
@@ -143,7 +141,7 @@ export default function AndroidAppModal({
                   ۲. گزینه <strong>«نصب برنامه» (Install app)</strong> یا <strong>«افزودن به صفحه اصلی» (Add to Home screen)</strong> را انتخاب نمایید.
                 </div>
                 <div>
-                  ۳. نام برنامه به صورت خودکار <strong>«آسمانسرا»</strong> ذخیره شده و بدون آیکون کروم مانند یک برنامه عادی در لیست اپلیکیشن‌های شما قرار می‌گیرد.
+                  ۳. نام برنامه به صورت خودکار <strong>«T_lift»</strong> ذخیره شده و بدون آیکون کروم مانند یک برنامه عادی در لیست اپلیکیشن‌های شما قرار می‌گیرد.
                 </div>
               </div>
             )}
@@ -219,7 +217,7 @@ export default function AndroidAppModal({
           {/* آدرس مستقیم برنامه برای باز کردن روی گوشی */}
           <div className="rounded-xl border border-neutral-200 dark:border-neutral-800 p-3 space-y-2 bg-neutral-50/70 dark:bg-neutral-850">
             <div className="font-bold text-neutral-900 dark:text-white text-[12px]">
-              آدرس مستقیم نسخه موبایل و برنامه آسمانسرا:
+              آدرس مستقیم نسخه موبایل و برنامه T_lift:
             </div>
             <div className="flex items-center gap-1.5 rounded-lg bg-white p-1.5 dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-700">
               <span className="flex-1 truncate font-mono text-[11.5px] text-left text-neutral-500" dir="ltr">
