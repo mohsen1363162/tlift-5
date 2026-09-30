@@ -1,3 +1,4 @@
+import "./technicianClassic.css";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Menu,
@@ -376,7 +377,7 @@ export default function TechnicianMobileApp({
   }, [jobs, previousMonthInfo]);
 
   // جهت سازگاری با متغیرهای قبلی
-  const pastJobs = lastMonthPendingJobs;
+  const pastJobs = jobs.filter(job => !job.month.done && jobDate(job) < currentJalaliDate);
 
   const initialCalendar = getCurrentJalaliMonthInfo();
   const [calendarYear, setCalendarYear] = useState(initialCalendar.year);
@@ -995,95 +996,38 @@ export default function TechnicianMobileApp({
   /*                                  views                                  */
   /* ---------------------------------------------------------------------- */
 
+  const classicDate = (value: string) => {
+    const normalized = normalizeJalaliDate(value);
+    const [year, month, day] = normalized.split("/").map(Number);
+    if (!year || !month || month > 12 || !day) return value || "ثبت نشده";
+    return `${fa(day)} ${JALALI_MONTH_NAMES[month - 1]} ${String(year).replace(/\d/g, d => "۰۱۲۳۴۵۶۷۸۹"[Number(d)])}`;
+  };
   const header = (title?: string, back?: () => void) => (
-    <div className="flex flex-col bg-white shadow-sm border-b">
-      <div className="flex items-center justify-between px-3 py-2">
-        <div className="flex items-center gap-1.5 min-w-0">
-          {back ? (
-            <button type="button" onClick={back} aria-label="بازگشت" className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-gray-50 active:bg-blue-100 hover:bg-gray-100">
-              <ChevronRight size={28} strokeWidth={2.5} className="text-gray-800" />
-            </button>
-          ) : (
-            <button type="button" onClick={() => setDrawer(true)} className="rounded-full p-2 hover:bg-gray-100">
-              <Menu size={22} className="text-gray-700" />
-            </button>
-          )}
-          <div className="truncate text-[13.5px] font-bold text-gray-800">{title || "آسمانسرا"}</div>
-        </div>
-
-        <div className="flex items-center gap-1.5 shrink-0">
-          {/* دکمه همگام‌سازی همراه با کلید سه‌گوش مدت زمان در موبایل */}
-          <SyncIndicator variant="mobile" onShowToast={notify} />
-
-          {/* دکمه آپدیت و دریافت آخرین تغییرات */}
-          <button
-            type="button"
-            onClick={handleAppUpdate}
-            disabled={updatingApp}
-            title={`بروزرسانی نرم‌افزار به آخرین نسخه (v${APP_VERSION})`}
-            className="flex items-center gap-1 rounded-full bg-blue-50 px-2 py-1.5 text-[11px] font-bold text-blue-700 border border-blue-300 hover:bg-blue-100 active:bg-blue-200 shadow-sm transition disabled:opacity-60"
-          >
-            <RefreshCw size={13} className={updatingApp ? "animate-spin" : ""} />
-            <span className="hidden sm:inline">آپدیت</span>
-          </button>
-
-          {/* دکمه راهنما و نصب نسخه مستقل برنامه آسمانسرا روی گوشی */}
-          <button
-            type="button"
-            onClick={() => setAndroidModal(true)}
-            title="نصب مستقیم برنامه آسمانسرا روی گوشی"
-            className="flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-1.5 text-[11px] font-bold text-emerald-700 border border-emerald-300 hover:bg-emerald-100 active:bg-emerald-200 shadow-sm transition"
-          >
-            <Download size={13} />
-            <span>نصب برنامه</span>
-          </button>
-
-          {/* دکمه شروع کار */}
-          <button
-            type="button"
-            onClick={toggleDay}
-            className={`flex items-center gap-1 rounded-full px-3 py-1.5 text-[12px] font-bold text-white shadow-sm ${
-              dayStart ? "bg-blue-600" : "bg-emerald-600 hover:bg-emerald-700"
-            }`}
-          >
-            {dayStart ? (
-              <>
-                <Square size={12} fill="white" /> {fmtDur(daySec)}
-              </>
-            ) : (
-              <>
-                <Play size={12} fill="white" /> شروع کار
-              </>
-            )}
-          </button>
-        </div>
+    <header className="classic-header">
+      <div className="classic-toolbar">
+        <button type="button" aria-label={back ? "بازگشت" : "منوی اصلی"} onClick={back || (() => setDrawer(true))}>
+          {back ? <ChevronRight size={30}/> : <Menu size={30}/>}
+        </button>
+        <span className="classic-page-title">{title || ""}</span>
+        <button type="button" onClick={toggleDay} className="classic-clock" aria-label={dayStart ? "پایان کار روزانه" : "شروع کار"}>
+          <span dir="ltr">{dayStart ? fmtDur(daySec) : "شروع کار"}</span>
+          {dayStart ? <Square size={20} fill="currentColor"/> : <Play size={20} fill="currentColor"/>}
+        </button>
       </div>
-
-      {/* بنر وضعیت آفلاین و صف سرویس‌ها */}
-      {isOffline && (
-        <div className="flex items-center justify-between bg-amber-50 px-3 py-1.5 text-[11px] text-amber-900 border-t border-amber-200">
-          <div className="flex items-center gap-1.5">
-            <span className="inline-block h-2 w-2 rounded-full bg-amber-500 animate-ping shrink-0" />
-            <span>
-              {sync.offlineServicesCount > 0
-                ? `${fa(sync.offlineServicesCount)} سرویس در صف امن دستگاه؛ پس از اتصال سرور ارسال می‌شود`
-                : syncServerUnavailable
-                ? "اینترنت وصل است، اما سرور همگام‌سازی پاسخ نمی‌دهد؛ اطلاعات روی گوشی محفوظ است"
-                : sync.isManualOffline
-                ? "حالت آفلاین دستی فعال است — برای اتصال، کلید همگام‌سازی را روشن کنید"
-                : "اینترنت دستگاه قطع است — می‌توانید سرویس را ثبت کنید"}
-            </span>
-          </div>
-          <button
-            type="button"
-            onClick={handleManualSync}
-            className="rounded bg-amber-600 px-2 py-0.5 text-[10.5px] font-bold text-white active:bg-amber-700 shrink-0"
-          >
-            ارسال و آپدیت
-          </button>
+      {isOffline && <div className="classic-sync-notice">
+        <div><Clock size={25}/><p>{sync.isManualOffline
+          ? "حالت آفلاین دستی فعال است. اطلاعات روی گوشی محفوظ است؛ برای ارسال، همگام‌سازی را فعال کنید."
+          : "همگام‌سازی اطلاعات انجام نشده است. لطفاً به اینترنت متصل شوید و روی دکمه‌ی زیر کلیک کنید."}</p></div>
+        <button type="button" onClick={handleManualSync}>همگام سازی</button>
+      </div>}
+      <details className="classic-tools">
+        <summary>ابزارهای همگام‌سازی و برنامه</summary>
+        <div><SyncIndicator variant="mobile" onShowToast={notify}/>
+          <button type="button" onClick={handleAppUpdate} disabled={updatingApp}>بروزرسانی نرم‌افزار (v{APP_VERSION})</button>
+          <button type="button" onClick={() => setAndroidModal(true)}>نصب برنامه</button>
         </div>
-      )}
-    </div>
+      </details>
+    </header>
   );
 
   const jobCard = (j: Job) => {
@@ -1098,17 +1042,17 @@ export default function TechnicianMobileApp({
         setSelected(j);
         setScreen("job");
       }}
-      className="flex w-full items-center gap-3 border-b bg-white px-3 py-3 text-right active:bg-gray-50"
+      className="classic-job-row"
     >
-      <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg bg-blue-50 text-blue-600">
+      <div className="classic-elevator">
         <Building2 size={26} />
       </div>
       <div className="min-w-0 flex-1">
         <div className="truncate text-[13px] font-bold text-gray-800">
-          {j.contract.building.replace(/^\*\s*/, "")} دستگاه 1 ({j.contract.no})
+          {j.contract.building.replace(/^\*\s*/, "")} دستگاه {j.month.deviceNo || "—"} ({j.contract.no})
         </div>
-        <div className="truncate text-[11.5px] text-gray-500">{j.contract.address || "قزوین"}</div>
-        <div className="mt-1 flex items-center gap-2 text-[11px]">
+        <div className="truncate text-[11.5px] text-gray-500">{j.contract.address || "آدرس ثبت نشده"}</div>
+        <div className="classic-job-status">
           <span className="rounded bg-gray-100 px-1.5 py-0.5 text-gray-600">
             سرویس {j.month.m} {j.month.y}
           </span>
@@ -1125,18 +1069,21 @@ export default function TechnicianMobileApp({
           )}
         </div>
       </div>
-      <ChevronLeft size={18} className="text-gray-400" />
+      <span className={`classic-job-date ${!j.month.done && jobDate(j) < currentJalaliDate ? "is-overdue" : ""}`}>{jobDate(j) === currentJalaliDate ? "امروز" : classicDate(jobDate(j))}</span>
     </button>
     );
   };
 
+  const [allTodayVisible, setAllTodayVisible] = useState(false);
+  const [allPastVisible, setAllPastVisible] = useState(false);
   const renderHomeView = () => (
     <>
       {header()}
-      <div className="grid grid-cols-3 gap-2 p-3 sm:grid-cols-5">
+      <div className="classic-home-actions">
         {[
-          { l: "لیست خرابی", i: AlertTriangle, c: "text-red-500", badge: 1, go: () => setScreen("services") },
-          { l: "ثبت خرابی", i: Plus, c: "text-orange-500", go: () => notify("فرم ثبت خرابی") },
+          { l: "لیست خرابی", i: AlertTriangle, c: "text-red-500", go: () => setScreen("services") },
+          { l: "ثبت خرابی", i: Plus, c: "text-orange-500", go: () => { setScreen("services"); notify("ساختمان موردنظر را انتخاب کنید؛ پس از شروع سرویس، بخش «خرابی‌ها» در دسترس است."); } },
+          { l: "کلید سه‌گوش", i: KeyRound, c: "text-gray-600", go: () => setScreen("triangleKeys") },
           { l: "ثبت سرویس", i: Wrench, c: "text-blue-600", go: () => setScreen("services") },
           { l: "ثبت سرویس آفلاین", i: CloudOff, c: "text-amber-600", go: () => setScreen("offlineService") },
           { l: "صف سرویس‌های آفلاین", i: Cloud, c: "text-emerald-600", badge: offlineDrafts.length || undefined, go: () => setScreen("offlineQueue") },
@@ -1144,7 +1091,7 @@ export default function TechnicianMobileApp({
           { l: "کارهای واگذارشده من", i: ClipboardList, c: "text-emerald-600", badge: myDailyAssignments.length || undefined, go: () => setScreen("myAssignedJobs") },
           { l: "گزارش روزانه من", i: FileBarChart2, c: "text-indigo-600", badge: (selectedDailyReportJobs.length + selectedDailyBreakdowns.length) || undefined, go: () => { setDailyReportDate(myReportDates[0] || currentJalaliDate); setScreen("dailyReports"); } },
           ...(canDispatchServices ? [{ l: "تقسیم کار روزانه", i: Send, c: "text-blue-600", badge: undefined, go: () => setScreen("dailyDispatch" as Screen) }] : []),
-        ].filter(b => homeMore || ["ثبت سرویس","لیست خرابی","کارهای واگذارشده من","گزارش روزانه من","تقسیم کار روزانه"].includes(b.l)).map((b) => (
+        ].filter(b => homeMore || ["ثبت سرویس","لیست خرابی","ثبت خرابی"].includes(b.l)).map((b) => (
           <button
             key={b.l}
             type="button"
@@ -1163,7 +1110,7 @@ export default function TechnicianMobileApp({
       </div>
       <button type="button" onClick={()=>setHomeMore(value=>!value)} className="mx-3 mb-2 w-[calc(100%-1.5rem)] rounded-lg border border-gray-200 bg-white py-2 text-[11px] font-bold text-gray-500">{homeMore?"نمایش گزینه‌های کمتر":"نمایش سایر امکانات"}</button>
 
-      <div className={`mx-3 rounded-xl p-3 text-center text-[12.5px] shadow-sm ${jobStart && selected ? "border border-blue-500 bg-gradient-to-l from-blue-600 to-blue-500 text-white" : "border border-dashed border-gray-300 bg-white text-gray-500"}`}>
+      <div className={`classic-active-work mx-3 rounded-xl p-3 text-center text-[12.5px] shadow-sm ${jobStart && selected ? "border border-blue-500 bg-gradient-to-l from-blue-600 to-blue-500 text-white" : "border border-dashed border-gray-300 bg-white text-gray-500"}`}>
         {jobStart && selected ? (
           <div className="space-y-2 text-right">
             <button type="button" onClick={() => setScreen("work")} className="w-full rounded-lg p-2 text-white">
@@ -1184,25 +1131,23 @@ export default function TechnicianMobileApp({
         )}
       </div>
 
-      <div className="mt-3 flex items-center justify-between px-3 text-[12.5px] font-bold text-gray-700">
+      <div className="classic-section-title">
         <span>کارهای امروز ({fa(todayJobs.length)})</span>
-        <span className="text-[11px] font-normal text-gray-400">{todayJalali()}</span>
+        <button type="button" className="classic-view-all" onClick={() => setAllTodayVisible(value => !value)}>{allTodayVisible ? "نمایش کمتر" : "مشاهده ی همه"}</button>
       </div>
-      <div className="mt-1 bg-white">{todayJobs.map(jobCard)}</div>
+      <div className="mt-1 bg-white">{(allTodayVisible ? todayJobs : todayJobs.slice(0, 8)).map(jobCard)}</div>
       {todayJobs.length === 0 && <div className="py-6 text-center text-[12px] text-gray-400">کاری برای امروز نیست</div>}
 
-      <div className="mt-4 flex items-center justify-between px-3 text-[12.5px] font-bold text-gray-700">
+      <div className="classic-section-title">
         <span className="flex items-center gap-1.5">
           <span className="h-2 w-2 rounded-full bg-red-500 animate-pulse" />
-          <span>سرویس‌های انجام‌نشده ماه گذشته ({previousMonthInfo.monthName})</span>
+          <span>کارهای تاریخ گذشته ({fa(pastJobs.length)})</span>
         </span>
-        <span className="rounded-full bg-red-100 px-2 py-0.5 text-[11px] font-bold text-red-700">
-          {fa(lastMonthPendingJobs.length)} مورد
-        </span>
+        <button type="button" className="classic-view-all" onClick={() => setAllPastVisible(value => !value)}>{allPastVisible ? "نمایش کمتر" : "مشاهده ی همه"}</button>
       </div>
-      <div className="mt-1 bg-white">{lastMonthPendingJobs.map((j) => jobCard(j))}</div>
-      {lastMonthPendingJobs.length === 0 && (
-        <div className="py-6 text-center text-[12px] text-gray-400 bg-white">تمام سرویس‌های ماه گذشته انجام شده است</div>
+      <div className="mt-1 bg-white">{(allPastVisible ? pastJobs : pastJobs.slice(0, 8)).map((j) => jobCard(j))}</div>
+      {pastJobs.length === 0 && (
+        <div className="py-6 text-center text-[12px] text-gray-400 bg-white">کار تاریخ‌گذشته‌ای ندارید</div>
       )}
       <div className="h-16" />
     </>
@@ -1335,10 +1280,11 @@ export default function TechnicianMobileApp({
 
         {/* Sophisticated Map Container with CSS selector matching .relative.h-44.w-full.overflow-hidden.bg-[linear-gradient(90deg,#e5e7eb_1px,transparent_1px),linear-gradient(#e5e7eb_1px,transparent_1px)].bg-[size:24px_24px].bg-gray-100 */}
         <div
-          className={`relative h-44 w-full overflow-hidden bg-[linear-gradient(90deg,#e5e7eb_1px,transparent_1px),linear-gradient(#e5e7eb_1px,transparent_1px)] bg-[size:24px_24px] bg-gray-100 border-b border-gray-200 transition-all duration-300 select-none ${
+          className={`classic-job-map relative h-44 w-full overflow-hidden bg-[linear-gradient(90deg,#e5e7eb_1px,transparent_1px),linear-gradient(#e5e7eb_1px,transparent_1px)] bg-[size:24px_24px] bg-gray-100 border-b border-gray-200 transition-all duration-300 select-none ${
             isDestinationReached ? "ring-4 ring-emerald-500 ring-inset shadow-[0_0_35px_rgba(16,185,129,0.5)]" : ""
           }`}
         >
+          {!savedLoc ? <div className="flex h-full flex-col items-center justify-center gap-3 bg-[#e8e9eb] p-6 text-center text-sm text-gray-600"><MapPin size={36}/><p>موقعیت ساختمان ثبت نشده است</p><button type="button" onClick={() => registerContractPosition(c)} className="rounded-lg border bg-white px-4 py-2">ثبت موقعیت ساختمان</button></div> : <>
           {/* Base Interactive OpenStreetMap Iframe with Dynamic Zoom Level */}
           <iframe
             title={`موقعیت ${c.building}`}
@@ -1603,8 +1549,9 @@ export default function TechnicianMobileApp({
               </div>
             </div>
           )}
+          </>}
         </div>
-        <div className="-mt-7 flex items-end justify-around px-2 relative z-10">
+        <div className="classic-map-actions -mt-7 flex items-end justify-around px-2 relative z-10">
           {round(ImageIcon, "تصاویر", "bg-gray-500", () => setContractInfoView("photos"))}
           {round(Phone, "تماس", "bg-sky-600", () => {
             const phone = c.coordinatorPhone || c.phone;
@@ -1618,16 +1565,18 @@ export default function TechnicianMobileApp({
           {round(Truck, "ایاب و ذهاب", "bg-orange-500", () => notify("ایاب و ذهاب ثبت شد"))}
         </div>
 
-        <div className="mx-3 mt-4 rounded-xl bg-violet-600 p-3 text-[12.5px] leading-6 text-white">
-          <div className="mb-1 font-bold">{c.building.replace(/^\*\s*/, "")}</div>
-          {c.address || "قزوین"} {c.locationStatus ? `— ${c.locationStatus}` : ""}
-        </div>
+        <section className="classic-service-card">
+          <h2>اطلاعات سرویس {c.building.replace(/^\*\s*/, "")}</h2>
+          <p>جزئیات ضروری پیش از شروع کار</p>
+          <div className="classic-service-meta"><span><CalendarDays size={22}/>{classicDate(jobDate(selected))}</span><span><Users size={22}/>{c.manager || "نماینده ثبت نشده"}</span></div>
+          <div className="classic-address"><b><KeyRound size={18}/> آدرس ساختمان</b><div>{c.address || "آدرس ثبت نشده"} {c.locationStatus ? `— ${c.locationStatus}` : ""}</div></div>
+        </section>
 
-        <div className="grid grid-cols-4 gap-2 p-3">
+        <div className="classic-detail-actions">
           {[
             { l: "ثبت موقعیت", i: MapPin, run: () => registerContractPosition(c) },
             { l: "اطلاعات دستگاه", i: Info, run: () => setContractInfoView("device") },
-            { l: "نماینده‌ها", i: Users, run: () => setContractInfoView("representatives") },
+            { l: "نماینده ها", i: Users, run: () => setContractInfoView("representatives") },
             { l: "عکس‌ها", i: ImageIcon, run: () => setContractInfoView("photos") },
           ].map((b) => (
             <button key={b.l} type="button" onClick={b.run} className="flex flex-col items-center gap-1 rounded-xl bg-white py-3 shadow-sm">
@@ -1637,17 +1586,18 @@ export default function TechnicianMobileApp({
           ))}
         </div>
 
-        <div className="mx-3 mb-20 overflow-hidden rounded-xl bg-white shadow-sm">
+        <div className="classic-detail-table">
           {[
             ["شناسه سرویس", `#${selected.month.id}`],
             ["شماره قرارداد", c.no],
+            ["شماره دستگاه", selected.month.deviceNo || "ثبت نشده"],
             ["دوره سرویس", `${selected.month.m} ${selected.month.y}`],
-            ["تاریخ شروع قرارداد", c.start],
-            ["تاریخ پایان قرارداد", c.end],
+            ["تاریخ شروع قرارداد", classicDate(c.start)],
+            ["تاریخ پایان قرارداد", classicDate(c.end)],
             ["مدیر / نماینده", c.manager],
             ["تلفن", c.phone || "-"],
             ["بدهی مشتری", `${fa(debt)} ریال`],
-            ["مبلغ ماهیانه", `${fa(selected.month.amount)} ریال`],
+            ["مبلغ سرویس ماهیانه", `${fa(selected.month.amount)} ریال`],
             ["پیوست‌ها", projectPhotos.length ? `${fa(projectPhotos.length)} فایل / عکس` : "—"],
             ["توضیحات اضافی", c.additionalNotes || "ثبت نشده"],
             ["محل کلید سه‌گوش", c.triangleKeyLocation || "ثبت نشده"],
@@ -1658,6 +1608,10 @@ export default function TechnicianMobileApp({
             </div>
           ))}
         </div>
+
+        <section className="classic-attachments"><h2>پیوست های این سرویس</h2>
+          {selected.month.attachments?.length ? <div className="classic-photo-grid">{selected.month.attachments.map((photo, i) => <a key={`${photo}-${i}`} href={photo} target="_blank" rel="noreferrer"><img src={photo} alt={`پیوست سرویس ${i + 1}`}/></a>)}</div> : <div className="classic-empty-attachments"><ImageIcon size={70}/><p>عکسی پیوست نشده است</p></div>}
+        </section>
 
         {contractInfoView && (
           <div className="fixed inset-0 z-[65] mx-auto flex max-w-[480px] flex-col bg-slate-100">
@@ -2305,14 +2259,14 @@ export default function TechnicianMobileApp({
     return (
       <>
         {header("تقویم سرویس‌ها")}
-        <div className="m-3 overflow-hidden rounded-2xl border border-blue-100 bg-white shadow-sm">
+        <div className="classic-calendar">
           <div className="flex items-center justify-between bg-gradient-to-l from-blue-600 to-sky-500 px-3 py-3 text-white">
-            <button type="button" onClick={() => changeMonth(-1)} className="rounded-full bg-white/15 p-2"><ChevronRight size={18} /></button>
+            <button type="button" onClick={() => changeMonth(-1)} aria-label="ماه قبلی" className="rounded-full bg-white/15 p-2">قبلی <ChevronRight size={18} /></button>
             <div className="text-center">
               <div className="text-[14px] font-bold">{JALALI_MONTH_NAMES[calendarMonth - 1]} {fa(calendarYear)}</div>
               <div className="mt-0.5 text-[10px] text-blue-100">روزهای رنگی دارای سرویس هستند</div>
             </div>
-            <button type="button" onClick={() => changeMonth(1)} className="rounded-full bg-white/15 p-2"><ChevronLeft size={18} /></button>
+            <button type="button" onClick={() => changeMonth(1)} aria-label="ماه بعدی" className="rounded-full bg-white/15 p-2"><ChevronLeft size={18} /> بعدی</button>
           </div>
           <div className="grid grid-cols-7 bg-blue-50 py-2 text-center text-[11px] font-bold text-blue-700">
             {["ش", "ی", "د", "س", "چ", "پ", "ج"].map((day) => <span key={day}>{day}</span>)}
@@ -2328,6 +2282,8 @@ export default function TechnicianMobileApp({
                 <button
                   key={date}
                   type="button"
+                  aria-label={`انتخاب روز ${date}`}
+                  aria-pressed={active}
                   onClick={() => setSelectedCalendarDate(date)}
                   className={`relative flex aspect-square items-center justify-center rounded-xl text-[12px] font-semibold transition ${
                     active ? "bg-blue-100 text-blue-900 ring-2 ring-blue-500 shadow-sm" : "text-gray-700 hover:bg-gray-50"
@@ -3351,18 +3307,18 @@ export default function TechnicianMobileApp({
   );
 
   const renderBottomNav = () => (
-    <div className="fixed inset-x-0 bottom-0 mx-auto flex max-w-[480px] justify-around border-t bg-white py-1.5">
+    <div className="classic-bottom-nav" role="navigation" aria-label="ناوبری موبایل">
       {[
         ["home", "خانه", Home],
         ["map", "نقشه", MapIcon],
         ["calendar", "تقویم", CalendarDays],
-        ["services", "سرویس‌ها", Briefcase],
-        ["triangleKeys", "کلید سه‌گوش", KeyRound],
+        ["services", "سرویس ها", Briefcase],
       ].map(([k, l, I]: any) => (
         <button
           key={k}
           type="button"
           onClick={() => setScreen(k)}
+          aria-current={screen === k ? "page" : undefined}
           className={`flex flex-col items-center gap-0.5 px-3 text-[10.5px] ${screen === k ? "text-blue-600" : "text-gray-500"}`}
         >
           <I size={20} /> {l}
@@ -3667,8 +3623,8 @@ export default function TechnicianMobileApp({
 
   /* -------------------------------- render -------------------------------- */
   return (
-    <div dir="rtl" className="min-h-screen w-full bg-gray-200 font-[Vazirmatn,Tahoma,system-ui]">
-      <div className="relative mx-auto min-h-screen max-w-[480px] bg-gray-100 shadow-xl">
+    <div dir="rtl" className="tlift-classic min-h-screen w-full font-[Vazirmatn,Tahoma,system-ui]">
+      <div className="classic-shell relative mx-auto min-h-screen max-w-[480px]">
         {screen === "home" && renderHomeView()}
         {screen === "job" && renderJobView()}
         {screen === "work" && renderWorkView()}
