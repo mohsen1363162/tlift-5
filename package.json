@@ -1,7 +1,7 @@
 {
   "name": "vite_react_shadcn_ts",
   "private": true,
-  "version": "3.36.15",
+  "version": "3.36.16",
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0 --port 3000",
@@ -14,7 +14,9 @@
     "test:recovery": "playwright test offline-recovery.spec.ts",
     "test:recovery:build": "vite build --config tests/harness/vite.config.ts",
     "test:materials": "node --test tests/unit/material-catalog.test.mjs && playwright test material-catalog.spec.ts",
-    "test:start-rules": "node --test tests/unit/active-services.test.mjs && playwright test mobile-start-rules.spec.ts"
+    "test:start-rules": "node --test tests/unit/active-services.test.mjs && playwright test mobile-start-rules.spec.ts",
+    "test:map": "node --test tests/unit/nearby-map.test.mjs && playwright test mobile-map-nearby.spec.ts",
+    "test:pwa": "node --test tests/unit/pwa-install.test.mjs && playwright test pwa-install.spec.ts"
   },
   "dependencies": {
     "@capacitor/android": "^8.5.2",

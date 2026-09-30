@@ -13,6 +13,22 @@ import { startDeviceHeartbeat } from './utils/serverHealth';
 import AppErrorBoundary from './components/AppErrorBoundary';
 import { startGlobalErrorLogging } from './utils/errorLogger';
 import { APP_VERSION } from './utils/appUpdater';
+import { startInstallCapture } from './utils/pwaInstall';
+
+// پیشنهاد نصب Chrome فقط یک‌بار و معمولاً خیلی زود می‌آید؛ همین‌جا و پیش از رندر برنامه نگه داشته می‌شود تا
+// دکمهٔ «نصب» در پنجرهٔ برنامه همیشه بتواند از آن استفاده کند (حتی با اینترنت کند و بارگذاری دیرهنگام صفحهٔ موبایل).
+startInstallCapture();
+
+// میان‌بر(هایی) که قبلاً با آدرس «/?mode=mobile» ساخته شده‌اند: این پسوند کاربردی ندارد و نباید در نوار آدرس بماند.
+try {
+  const launchUrl = new URL(window.location.href);
+  if (launchUrl.searchParams.get("mode") === "mobile") {
+    launchUrl.searchParams.delete("mode");
+    window.history.replaceState(window.history.state, "", `${launchUrl.pathname}${launchUrl.search}${launchUrl.hash}`);
+  }
+} catch {
+  /* آدرس قابل‌تغییر نیست؛ برنامه بدون آن ادامه می‌دهد */
+}
 
 // بروزرسانی PWA: در هر بار ورود/بازگشت به صفحه، نسخه جدید Service Worker
 // مستقیماً از سرور بررسی می‌شود. پس از فعال‌شدن نسخه تازه فقط یک‌بار صفحه

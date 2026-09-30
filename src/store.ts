@@ -253,7 +253,24 @@ function writeLocalStorage<T>(key: string, data: T) {
   }
 }
 
+// خواندن جزئیات قرارداد گاهی ماه‌های قدیمی را هم‌ترازِ تاریخ برنامه و مبلغ مصوب می‌کند. قبلاً هر قرارداد همان لحظه کل جزئیات
+// (حدود ۱ مگابایت) را دوباره ذخیره می‌کرد؛ با ۵۰۰ قرارداد، اولین اجرا صدها مگابایت نوشتن و چند ثانیه قفل بود.
+// حالا این نوشتن‌ها در یک نوبت جمع می‌شوند و فقط یک‌بار ذخیره می‌شود؛ داده‌ی ذخیره‌شده‌ی نهایی همان است.
+let contractDetailsSaveTimer: ReturnType<typeof setTimeout> | null = null;
+function saveContractDetailsSoon() {
+  if (contractDetailsSaveTimer !== null) return;
+  contractDetailsSaveTimer = setTimeout(() => {
+    contractDetailsSaveTimer = null;
+    saveStorage("tlift_contract_details", contractDetailsMap);
+  }, 0);
+}
+
 function saveStorage<T>(key: string, data: T) {
+  if (key === "tlift_contract_details" && contractDetailsSaveTimer !== null) {
+    // یک ذخیرهٔ مستقیم جدیدتر از نوشتن منتظر است؛ نیازی به نوشتن دوباره نیست.
+    clearTimeout(contractDetailsSaveTimer);
+    contractDetailsSaveTimer = null;
+  }
   writeLocalStorage(key, data);
   // آینه‌سازی در سرور (پرچم‌های seed همگام نمی‌شوند)
   if (!key.includes("seeded")) pushKey(key, data);
@@ -1448,7 +1465,7 @@ export const appStore = {
         invoices: [],
         breakdowns: [],
       };
-      saveStorage("tlift_contract_details", contractDetailsMap);
+      saveContractDetailsSoon();
     }
     const contract = contracts.find((item) => item.id === contractId);
     if (contract) {
@@ -1465,7 +1482,7 @@ export const appStore = {
         changed = true;
         return { ...month, plannedDate, amount: targetAmount };
       });
-      if (changed) saveStorage("tlift_contract_details", contractDetailsMap);
+      if (changed) saveContractDetailsSoon();
     }
     return contractDetailsMap[contractId];
   },

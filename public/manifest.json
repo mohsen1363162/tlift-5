@@ -3,7 +3,7 @@
   "name": "T_lift",
   "short_name": "T_lift",
   "description": "نرم‌افزار مستقل خدمات و مدیریت آسانسور آسمانسرا",
-  "start_url": "/?mode=mobile",
+  "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "display_override": ["window-controls-overlay", "standalone", "minimal-ui"],

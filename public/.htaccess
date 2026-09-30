@@ -11,6 +11,11 @@
   RewriteRule ^ index.html [L]
 </IfModule>
 
+# مانیفست برنامه (PWA) با نوع استاندارد خودش سرو شود (بعضی هاست‌ها .webmanifest را text/plain می‌دهند).
+<IfModule mod_mime.c>
+  AddType application/manifest+json .webmanifest
+</IfModule>
+
 # فایل‌های ورود و Service Worker هرگز نباید با نسخه قدیمی در مرورگر بمانند.
 # نام فایل‌های داخل assets هش دارد و می‌تواند با خیال راحت طولانی‌مدت کش شود.
 <IfModule mod_headers.c>

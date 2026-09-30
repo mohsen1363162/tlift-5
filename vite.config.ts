@@ -43,7 +43,7 @@ export default defineConfig({
         orientation: "portrait",
         dir: "rtl",
         lang: "fa",
-        start_url: "/?mode=mobile",
+        start_url: "/",
         scope: "/",
         icons: [
           {

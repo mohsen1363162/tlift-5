@@ -19,7 +19,6 @@ import {
   Truck,
   Image as ImageIcon,
   MapPin,
-  Crosshair,
   Info,
   Users,
   Mic,
@@ -84,6 +83,16 @@ import { matchesPartSearch } from "../../utils/materialCatalog";
 import { syncNow, toggleManualOffline } from "../../cloudSync";
 import SyncIndicator, { useSyncState } from "../SyncIndicator";
 import AndroidAppModal from "../AndroidAppModal";
+import MapCanvas, { type MapPinData } from "./MapCanvas";
+import {
+  countWithin,
+  formatDistanceFa,
+  selectMapBuildings,
+  viewAround,
+  viewFitting,
+  type MapFilterMode,
+  type MapRow,
+} from "../../utils/nearbyMap";
 import NumberStepper from "../NumberStepper";
 import {
   getCurrentJalaliMonthInfo,
@@ -124,6 +133,12 @@ const distanceMeters = (lat1: number, lon1: number, lat2: number, lon2: number) 
   return 6371000 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 };
 const monthNumber = (name: string) => Math.max(1, JALALI_MONTH_NAMES.indexOf(name) + 1);
+// نقشهٔ موبایل: فقط ساختمان‌های نزدیک به موقعیت همکار، نه همهٔ قراردادها.
+const MAP_PAGE_SIZE = 12;
+const MAP_MAX_ITEMS = 120;
+const MAP_DEFAULT_RADIUS_M = 2500;
+const MAP_RADIUS_CHOICES = [1000, 2500, 5000, 10000];
+const QAZVIN_CENTER = { lat: 36.2688, lng: 50.0041 };
 const compressProjectPhoto = (file: File): Promise<string> => new Promise((resolve, reject) => {
   const reader = new FileReader();
   reader.onerror = () => reject(new Error("خواندن عکس انجام نشد"));
@@ -433,12 +448,102 @@ export default function TechnicianMobileApp({
 
   /* ------------------------------- map screen states ------------------------------- */
   const contractGeoLocations = useContractGeoLocations();
+  // null = «نزدیک‌ترین ساختمان» (پیش‌فرض)، -1 = کاربر کارت پایین نقشه را بسته است
   const [mapSelectedBuildingId, setMapSelectedBuildingId] = useState<number | null>(null);
-  const [mapFilter, setMapFilter] = useState<"all" | "registered" | "pending" | "nearby">("all");
+  // پیش‌فرض: فقط ساختمان‌های اطراف همکار (GPS ثبت‌شده داخل شعاع)، نزدیک‌ترین اول
+  const [mapFilter, setMapFilter] = useState<MapFilterMode>("nearby");
   const [mapSearch, setMapSearch] = useState("");
-  const [userGps, setUserGps] = useState<{ lat: number; lng: number; accuracy?: number } | null>(null);
+  const [mapRadiusM, setMapRadiusM] = useState(MAP_DEFAULT_RADIUS_M);
+  const [mapLimit, setMapLimit] = useState(MAP_PAGE_SIZE);
+  const [userGps, setUserGps] = useState<{ lat: number; lng: number; accuracy?: number; at?: number } | null>(null);
   const [isLocatingUser, setIsLocatingUser] = useState(false);
+  const [mapLocateError, setMapLocateError] = useState<"denied" | "failed" | null>(null);
   const [showOsmBase, setShowOsmBase] = useState(true);
+  const mapStageRef = useRef<HTMLDivElement>(null);
+
+  // همهٔ محاسبه‌های نقشه فقط وقتی صفحهٔ نقشه باز است اجرا می‌شوند و حجم کارشان به تعداد «نمایش‌داده‌شده‌ها» محدود است،
+  // نه به تعداد قراردادها. تیک یک‌ثانیه‌ای برنامه آن‌ها را دوباره حساب نمی‌کند.
+  const onMapScreen = screen === "map";
+  const contractById = useMemo(() => (onMapScreen ? new Map(contracts.map((contract) => [contract.id, contract])) : null), [onMapScreen, contracts]);
+  const geoById = useMemo(() => (onMapScreen ? new Map(contractGeoLocations.map((geo) => [geo.contractId, geo])) : null), [onMapScreen, contractGeoLocations]);
+  const pendingIdsKey = useMemo(
+    () => (onMapScreen ? lastMonthPendingJobs.map((job) => job.contract.id).sort((a, b) => a - b).join(",") : ""),
+    [onMapScreen, lastMonthPendingJobs],
+  );
+  const mapRows = useMemo<MapRow[]>(() => {
+    if (!onMapScreen || !geoById) return [];
+    const pending = new Set(pendingIdsKey ? pendingIdsKey.split(",").map(Number) : []);
+    return contracts.map((contract) => {
+      const geo = geoById.get(contract.id);
+      return {
+        id: contract.id,
+        lat: geo ? geo.latitude : null,
+        lng: geo ? geo.longitude : null,
+        pending: pending.has(contract.id),
+        search: `${contract.building} ${contract.no} ${contract.manager} ${contract.address || ""}`.toLowerCase(),
+        name: contract.building.replace(/^\*\s*/, ""),
+      };
+    });
+  }, [onMapScreen, contracts, geoById, pendingIdsKey]);
+  const mapCoverage = useMemo(
+    () => ({ registered: mapRows.filter((row) => row.lat !== null).length, pending: mapRows.filter((row) => row.pending).length }),
+    [mapRows],
+  );
+  const gpsLat = userGps ? userGps.lat : null;
+  const gpsLng = userGps ? userGps.lng : null;
+  const mapOrigin = useMemo(() => (gpsLat !== null && gpsLng !== null ? { lat: gpsLat, lng: gpsLng } : null), [gpsLat, gpsLng]);
+  const mapNearby = useMemo(() => (mapOrigin ? countWithin(mapRows, mapOrigin, mapRadiusM) : { total: 0, pending: 0 }), [mapRows, mapOrigin, mapRadiusM]);
+  const mapSelection = useMemo(
+    () => (onMapScreen ? selectMapBuildings(mapRows, { mode: mapFilter, query: mapSearch, origin: mapOrigin, radiusM: mapRadiusM, limit: mapLimit }) : null),
+    [onMapScreen, mapRows, mapFilter, mapSearch, mapOrigin, mapRadiusM, mapLimit],
+  );
+  // pendingIdsKey فقط برای تازه‌سازی است: با پایان‌یافتن سرویس یک ساختمان، کارت و شمارندهٔ آن بدون رندر اضافه به‌روز می‌شود.
+  const mapItems = useMemo(() => {
+    if (!mapSelection || !contractById || !geoById) return [];
+    return mapSelection.picks.flatMap((pick) => {
+      const contract = contractById.get(pick.id);
+      if (!contract) return [];
+      const geo = geoById.get(pick.id);
+      const details = appStore.getContractDetails(contract.id);
+      const months = details.months || [];
+      const lastMonthService = months.find((m) => m.m === previousMonthInfo.monthName && m.y === previousMonthInfo.year);
+      const isLastMonthPending = lastMonthService ? !lastMonthService.done : false;
+      const nextMonth = (isLastMonthPending && lastMonthService)
+        ? lastMonthService
+        : (months.find((m) => !m.done) || months[0] || { id: 1, m: previousMonthInfo.monthName, y: previousMonthInfo.year, amount: 0, done: false, paid: false });
+      const targetJob: Job = { contract, month: nextMonth, overdue: isLastMonthPending };
+      return [{
+        contract,
+        lat: geo ? geo.latitude : null,
+        lng: geo ? geo.longitude : null,
+        isRegistered: !!geo,
+        distM: pick.distanceM,
+        doneCount: months.filter((m) => m.done).length,
+        pendingCount: isLastMonthPending ? 1 : 0,
+        isLastMonthPending,
+        nextMonth,
+        targetJob,
+      }];
+    });
+  }, [mapSelection, contractById, geoById, previousMonthInfo, pendingIdsKey]);
+  const mapPins = useMemo<MapPinData[]>(
+    () => mapItems
+      .filter((item) => item.lat !== null && item.lng !== null)
+      .map((item) => ({
+        id: item.contract.id,
+        lat: item.lat as number,
+        lng: item.lng as number,
+        pending: item.pendingCount,
+        label: item.contract.building.replace(/^\*\s*/, ""),
+        distanceLabel: item.distM === null ? null : formatDistanceFa(item.distM),
+      })),
+    [mapItems],
+  );
+  const mapView = useMemo(() => {
+    if (mapFilter === "nearby" && !mapSearch.trim() && mapOrigin) return viewAround(mapOrigin, mapRadiusM * 1.12);
+    const points = mapPins.map((pin) => ({ lat: pin.lat, lng: pin.lng }));
+    return viewFitting(points.length ? points : mapOrigin ? [mapOrigin] : [], { fallback: QAZVIN_CENTER, minHalfSpanM: 300 });
+  }, [mapFilter, mapSearch, mapOrigin, mapRadiusM, mapPins]);
   const [isSimulatedArrival, setIsSimulatedArrival] = useState(false);
   const dailyRoute = useMemo(() => planDailyRoute(myDailyAssignments.map(service => { const contract=contracts.find(item=>item.id===service.contractId||(!!service.contractNo && (item.no===service.contractNo||item.contractNo===service.contractNo))); const geo=contractGeoLocations.find(item=>item.contractId===contract?.id); return { id:service.id, contractId:contract?.id, name:service.buildingName, address:service.address||contract?.address, zone:service.zone||contract?.zone, latitude:geo?.latitude, longitude:geo?.longitude }; }), userGps ? {latitude:userGps.lat,longitude:userGps.lng} : undefined), [myDailyAssignments,contracts,contractGeoLocations,userGps]);
   const openDailyRoute = () => { const url=mapsRouteUrl(dailyRoute,userGps?{latitude:userGps.lat,longitude:userGps.lng}:undefined); if(!url)return notify("برای نمایش مسیر، موقعیت ساختمان‌ها باید ثبت شود"); window.open(url,"_blank","noopener,noreferrer"); };
@@ -755,6 +860,43 @@ export default function TechnicianMobileApp({
     setLocationDraft(null);
     notify("موقعیت دقیق ساختمان ثبت شد");
   };
+
+  // موقعیت فعلی همکار برای نقشهٔ «نزدیک من». با ورود به نقشه خودکار اجرا می‌شود (بدون پیام مزاحم)؛
+  // اگر دسترسی رد شده باشد مرورگر دوباره سؤال نمی‌کند و پیام راهنما نشان داده می‌شود.
+  // ورود خودکار به نقشه ابتدا یک موقعیت سریع و تقریبی می‌گیرد (داخل ساختمان و با GPS ضعیف هم جواب می‌دهد)؛
+  // «موقعیت من» همان دقت بالای قبلی را می‌خواهد.
+  const getQuickPosition = async (): Promise<GeolocationPosition> => {
+    if (!navigator.geolocation) throw new Error("unsupported");
+    const attempt = (options: PositionOptions) =>
+      new Promise<GeolocationPosition>((resolve, reject) => navigator.geolocation.getCurrentPosition(resolve, reject, options));
+    try {
+      return await attempt({ enableHighAccuracy: false, timeout: 8000, maximumAge: 120000 });
+    } catch (error) {
+      if ((error as { code?: number } | null)?.code === 1) throw error; // دسترسی رد شده؛ تلاش دوباره فایده ندارد
+      return attempt({ enableHighAccuracy: true, timeout: 15000, maximumAge: 15000 });
+    }
+  };
+
+  const locateTechnician = async (silent = false) => {
+    setIsLocatingUser(true);
+    setMapLocateError(null);
+    try {
+      const pos = await (silent ? getQuickPosition() : getCurrentPosition());
+      setUserGps({ lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy: pos.coords.accuracy, at: Date.now() });
+      if (!silent) notify("موقعیت مکانی شما با موفقیت شناسایی شد");
+    } catch (error) {
+      setMapLocateError((error as { code?: number } | null)?.code === 1 ? "denied" : "failed");
+      if (!silent) notify("امکان دریافت GPS وجود ندارد. دسترسی موقعیت مکانی دستگاه را فعال کنید.");
+    } finally {
+      setIsLocatingUser(false);
+    }
+  };
+
+  useEffect(() => {
+    if (screen !== "map") return;
+    if (userGps?.at && Date.now() - userGps.at < 60_000) return;
+    void locateTechnician(true);
+  }, [screen]);
 
   // سرویس در حال انجام همین همکار (از فهرست تازهٔ فروشگاه؛ نه از کپی قدیمی state).
   const myRunningService = () =>
@@ -2758,104 +2900,36 @@ export default function TechnicianMobileApp({
   };
 
   /* --------------------------------- Map View --------------------------------- */
+  // نقشه فقط ساختمان‌های «نزدیک به موقعیت همکار» را نشان می‌دهد و تعداد نشانگرها محدود است
+  // (حداکثر MAP_MAX_ITEMS، پیش‌فرض MAP_PAGE_SIZE). مختصات فقط از GPS ثبت‌شدهٔ خود ساختمان می‌آید؛
+  // ساختمانِ بدون GPS هرگز با مختصات ساختگی روی نقشه نمی‌افتد و مسیریابی هم نمی‌شود، اما از «جستجو»،
+  // «همه ساختمان‌ها» و «انجام‌نشده ماه گذشته» قابل دسترسی است و می‌توان برایش «ثبت GPS» زد.
   const renderMapView = () => {
-    // 1. Helper to retrieve or calculate realistic coordinate for any contract
-    const getContractCoords = (c: Contract) => {
-      const saved = contractGeoLocations.find((item) => item.contractId === c.id);
-      if (saved) return { lat: saved.latitude, lng: saved.longitude, isRegistered: true };
-
-      // Deterministic realistic position across Qazvin based on contract id
-      const seed1 = ((c.id * 179 + 31) % 1000) / 1000;
-      const seed2 = ((c.id * 313 + 73) % 1000) / 1000;
-      const lat = 36.255 + seed1 * 0.055;
-      const lng = 49.980 + seed2 * 0.060;
-      return { lat, lng, isRegistered: false };
-    };
-
-    // 2. Prepare all building items with service counts and distances
-    const allBuildings = contracts.map((c) => {
-      const coords = getContractCoords(c);
-      const details = appStore.getContractDetails(c.id);
-      const months = details.months || [];
-      const lastMonthService = months.find((m) => m.m === previousMonthInfo.monthName && m.y === previousMonthInfo.year);
-      const isLastMonthPending = lastMonthService ? !lastMonthService.done : false;
-      const doneCount = months.filter((m) => m.done).length;
-      const pendingCount = isLastMonthPending ? 1 : 0;
-      const nextMonth = (isLastMonthPending && lastMonthService)
-        ? lastMonthService
-        : (months.find((m) => !m.done) || months[0] || { id: 1, m: previousMonthInfo.monthName, y: previousMonthInfo.year, amount: 0, done: false, paid: false });
-      const targetJob: Job = { contract: c, month: nextMonth, overdue: isLastMonthPending };
-      const distM = userGps ? Math.round(distanceMeters(userGps.lat, userGps.lng, coords.lat, coords.lng)) : null;
-      const activeAssignment = activeServiceAssignments.find((a) => a.contractId === c.id);
-
-      return {
-        contract: c,
-        coords,
-        details,
-        months,
-        doneCount,
-        pendingCount,
-        isLastMonthPending,
-        nextMonth,
-        targetJob,
-        distM,
-        activeAssignment,
-        isAllDone: !isLastMonthPending,
-      };
-    });
-
-    // 3. User GPS Locator
-    const locateTechnician = async () => {
-      setIsLocatingUser(true);
-      try {
-        const pos = await getCurrentPosition();
-        setUserGps({
-          lat: pos.coords.latitude,
-          lng: pos.coords.longitude,
-          accuracy: pos.coords.accuracy,
-        });
-        notify("موقعیت مکانی شما با موفقیت شناسایی شد");
-      } catch {
-        notify("امکان دریافت GPS وجود ندارد. دسترسی موقعیت مکانی دستگاه را فعال کنید.");
-      } finally {
-        setIsLocatingUser(false);
-      }
-    };
-
-    // 4. Area Geofence Detection (Within 2.5 km of technician)
-    const nearbyBuildings = userGps
-      ? allBuildings.filter((b) => b.distM !== null && b.distM <= 2500)
-      : [];
-    const nearbyServicesCount = nearbyBuildings.reduce((sum, b) => sum + b.pendingCount, 0);
-
-    // 5. Filter & Search
-    const query = mapSearch.trim().toLowerCase();
-    const filteredBuildings = allBuildings.filter((b) => {
-      if (query) {
-        const title = b.contract.building.toLowerCase();
-        const no = String(b.contract.no);
-        const manager = b.contract.manager.toLowerCase();
-        const address = (b.contract.address || "").toLowerCase();
-        if (!title.includes(query) && !no.includes(query) && !manager.includes(query) && !address.includes(query)) {
-          return false;
-        }
-      }
-      if (mapFilter === "registered") return b.coords.isRegistered;
-      if (mapFilter === "pending") return b.pendingCount > 0;
-      if (mapFilter === "nearby") return b.distM !== null && b.distM <= 2500;
-      return true;
-    });
-
-    // 6. Selected Building
+    const fa = (value: number) => value.toLocaleString("fa-IR");
+    const searching = mapSearch.trim().length > 0;
+    const nearbyMode = mapFilter === "nearby" && !searching;
+    const shown = mapItems.length;
+    const total = mapSelection?.total ?? 0;
     const selectedItem =
-      allBuildings.find((b) => b.contract.id === mapSelectedBuildingId) ||
-      (filteredBuildings.length > 0 ? filteredBuildings[0] : allBuildings[0]);
-
-    // Bounds for relative marker positioning on Qazvin canvas
-    const minLat = 36.240;
-    const maxLat = 36.320;
-    const minLng = 49.970;
-    const maxLng = 50.050;
+      mapSelectedBuildingId === -1
+        ? null
+        : mapItems.find((item) => item.contract.id === mapSelectedBuildingId) ?? mapItems[0] ?? null;
+    const selectedPinId = selectedItem && selectedItem.isRegistered ? selectedItem.contract.id : null;
+    const distanceText = (meters: number) => (meters < 1000 ? `${fa(meters)} متر` : `${(meters / 1000).toLocaleString("fa-IR", { maximumFractionDigits: 1 })} کیلومتر`);
+    const radiusText = (meters: number) => (meters >= 1000 ? `${fa(meters / 1000)} کم` : `${fa(meters)} م`);
+    const chip = (active: boolean, tone: string, idle = "bg-gray-100 text-gray-600 hover:bg-gray-200") =>
+      `shrink-0 rounded-lg px-2.5 py-1 transition ${active ? `${tone} font-bold text-white shadow-xs` : idle}`;
+    const pickFilter = (mode: MapFilterMode) => {
+      setMapFilter(mode);
+      setMapSearch("");
+      setMapLimit(MAP_PAGE_SIZE);
+      setMapSelectedBuildingId(null);
+    };
+    const selectBuilding = (id: number) => {
+      setMapSelectedBuildingId(id);
+      mapStageRef.current?.scrollIntoView({ block: "start" });
+    };
+    const unregisteredCount = Math.max(0, mapRows.length - mapCoverage.registered);
 
     return (
       <div className="flex flex-col min-h-screen bg-slate-100">
@@ -2869,7 +2943,11 @@ export default function TechnicianMobileApp({
               <input
                 type="text"
                 value={mapSearch}
-                onChange={(e) => setMapSearch(e.target.value)}
+                onChange={(e) => {
+                  setMapSearch(e.target.value);
+                  setMapLimit(MAP_PAGE_SIZE);
+                  setMapSelectedBuildingId(null);
+                }}
                 placeholder="جستجوی ساختمان یا شماره قرارداد روی نقشه..."
                 className="w-full rounded-xl border border-gray-200 bg-gray-50 py-2 pr-9 pl-8 text-[11.5px] outline-none focus:border-blue-500 focus:bg-white"
               />
@@ -2877,6 +2955,7 @@ export default function TechnicianMobileApp({
                 <button
                   type="button"
                   onClick={() => setMapSearch("")}
+                  aria-label="پاک کردن جستجو"
                   className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
                 >
                   <X size={14} />
@@ -2886,12 +2965,10 @@ export default function TechnicianMobileApp({
 
             <button
               type="button"
-              onClick={locateTechnician}
+              onClick={() => void locateTechnician()}
               disabled={isLocatingUser}
               className={`flex items-center gap-1 rounded-xl px-2.5 py-2 text-[11px] font-bold shadow-xs transition active:scale-95 ${
-                userGps
-                  ? "bg-emerald-600 text-white hover:bg-emerald-700"
-                  : "bg-blue-600 text-white hover:bg-blue-700"
+                userGps ? "bg-emerald-600 text-white hover:bg-emerald-700" : "bg-blue-600 text-white hover:bg-blue-700"
               }`}
               title="موقعیت‌یابی زنده GPS"
             >
@@ -2902,77 +2979,79 @@ export default function TechnicianMobileApp({
 
           {/* Filter Chips */}
           <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar text-[10.5px]">
-            <button
-              type="button"
-              onClick={() => setMapFilter("all")}
-              className={`shrink-0 rounded-lg px-2.5 py-1 transition ${
-                mapFilter === "all"
-                  ? "bg-blue-600 font-bold text-white shadow-xs"
-                  : "bg-gray-100 text-gray-600 hover:bg-gray-200"
-              }`}
-            >
-              همه ساختمان‌ها ({allBuildings.length})
+            <button type="button" onClick={() => pickFilter("nearby")} className={chip(nearbyMode, "bg-purple-600", "bg-purple-50 text-purple-700 hover:bg-purple-100")}>
+              📍 نزدیک من{userGps ? ` (${fa(mapNearby.total)})` : ""}
             </button>
-            <button
-              type="button"
-              onClick={() => setMapFilter("registered")}
-              className={`shrink-0 rounded-lg px-2.5 py-1 transition ${
-                mapFilter === "registered"
-                  ? "bg-emerald-600 font-bold text-white shadow-xs"
-                  : "bg-gray-100 text-gray-600 hover:bg-gray-200"
-              }`}
-            >
-              ✓ GPS ثبت‌شده ({allBuildings.filter((b) => b.coords.isRegistered).length})
+            <button type="button" onClick={() => pickFilter("all")} className={chip(mapFilter === "all" && !searching, "bg-blue-600")}>
+              همه ساختمان‌ها ({fa(contracts.length)})
             </button>
-            <button
-              type="button"
-              onClick={() => setMapFilter("pending")}
-              className={`shrink-0 rounded-lg px-2.5 py-1 transition ${
-                mapFilter === "pending"
-                  ? "bg-amber-600 font-bold text-white shadow-xs"
-                  : "bg-gray-100 text-gray-600 hover:bg-gray-200"
-              }`}
-            >
-              انجام‌نشده ماه گذشته ({allBuildings.filter((b) => b.isLastMonthPending).length})
+            <button type="button" onClick={() => pickFilter("registered")} className={chip(mapFilter === "registered" && !searching, "bg-emerald-600")}>
+              ✓ GPS ثبت‌شده ({fa(mapCoverage.registered)})
             </button>
-            {userGps && (
-              <button
-                type="button"
-                onClick={() => setMapFilter("nearby")}
-                className={`shrink-0 rounded-lg px-2.5 py-1 transition ${
-                  mapFilter === "nearby"
-                    ? "bg-purple-600 font-bold text-white shadow-xs"
-                    : "bg-purple-50 text-purple-700 hover:bg-purple-100"
-                }`}
-              >
-                📍 نزدیک من ({nearbyBuildings.length})
-              </button>
+            <button type="button" onClick={() => pickFilter("pending")} className={chip(mapFilter === "pending" && !searching, "bg-amber-600")}>
+              انجام‌نشده ماه گذشته ({fa(mapCoverage.pending)})
+            </button>
+          </div>
+
+          {/* موقعیت شما + شعاع نزدیکی */}
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[10.5px] text-gray-600">
+            {isLocatingUser ? (
+              <span className="text-blue-700">در حال یافتن موقعیت شما…</span>
+            ) : userGps ? (
+              userGps.accuracy && userGps.accuracy > 500 ? (
+                <span className="text-amber-700">
+                  دقت موقعیت شما کم است ({fa(Math.round(userGps.accuracy))} متر)؛ برای دقت بیشتر «GPS فعال» را بزنید.
+                </span>
+              ) : (
+                <span className="text-emerald-700">
+                  موقعیت شما دریافت شد{userGps.accuracy ? ` · دقت ${fa(Math.round(userGps.accuracy))} متر` : ""}
+                </span>
+              )
+            ) : mapLocateError === "denied" ? (
+              <span className="text-rose-700">دسترسی موقعیت مکانی بسته است؛ در تنظیمات مرورگر برای این سایت «Location» را مجاز کنید و «موقعیت من» را بزنید.</span>
+            ) : mapLocateError === "failed" ? (
+              <span className="text-rose-700">موقعیت شما دریافت نشد؛ GPS گوشی را روشن کنید و «موقعیت من» را بزنید.</span>
+            ) : (
+              <span>برای دیدن ساختمان‌های اطراف، «موقعیت من» را بزنید.</span>
+            )}
+            {nearbyMode && (
+              <span className="flex items-center gap-1" role="group" aria-label="شعاع نزدیکی">
+                <span className="text-gray-500">شعاع:</span>
+                {MAP_RADIUS_CHOICES.map((meters) => (
+                  <button
+                    key={meters}
+                    type="button"
+                    onClick={() => {
+                      setMapRadiusM(meters);
+                      setMapLimit(MAP_PAGE_SIZE);
+                      setMapSelectedBuildingId(null);
+                    }}
+                    aria-pressed={mapRadiusM === meters}
+                    className={`rounded-md px-2 py-0.5 font-mono text-[10px] ${mapRadiusM === meters ? "bg-purple-600 font-bold text-white" : "bg-gray-100 text-gray-600"}`}
+                  >
+                    {radiusText(meters)}
+                  </button>
+                ))}
+              </span>
             )}
           </div>
         </div>
 
-        {/* Area Geofence Alert Bar (when user enters area) */}
-        {userGps && nearbyBuildings.length > 0 && (
-          <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 px-3 py-2 text-white shadow-md flex items-center justify-between z-20">
+        {/* Area Geofence Alert Bar (وقتی ساختمانی در اطراف هست ولی فیلتر دیگری انتخاب شده) */}
+        {userGps && mapNearby.total > 0 && !nearbyMode && (
+          <div className="bg-slate-900 px-3 py-2 text-white shadow-md flex items-center justify-between z-20">
             <div className="flex items-center gap-2">
               <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-emerald-500/20 text-emerald-400">
                 <Navigation size={14} className="rotate-45" />
               </span>
               <div>
-                <div className="text-[11.5px] font-bold">
-                  ورود به محدوده سرویس ({nearbyBuildings.length} ساختمان در اطراف شما)
-                </div>
-                <div className="text-[9.5px] text-slate-300">
-                  مجموعاً {nearbyServicesCount} سرویس در این منطقه برای انجام وجود دارد
-                </div>
+                <div className="text-[11.5px] font-bold">ورود به محدوده سرویس ({fa(mapNearby.total)} ساختمان در اطراف شما)</div>
+                <div className="text-[9.5px] text-slate-300">مجموعاً {fa(mapNearby.pending)} سرویس در این منطقه برای انجام وجود دارد</div>
               </div>
             </div>
             <button
               type="button"
-              onClick={() => {
-                setMapFilter("nearby");
-                if (nearbyBuildings[0]) setMapSelectedBuildingId(nearbyBuildings[0].contract.id);
-              }}
+              onClick={() => pickFilter("nearby")}
               className="rounded-lg bg-emerald-600 px-2 py-1 text-[10px] font-bold text-white shadow hover:bg-emerald-700"
             >
               نمایش منطقه
@@ -2980,255 +3059,253 @@ export default function TechnicianMobileApp({
           </div>
         )}
 
-        {/* Map View Canvas Container */}
-        <div className="relative flex-1 min-h-[380px] w-full overflow-hidden bg-slate-200 select-none">
-          {/* Base OpenStreetMap Iframe or Grid */}
-          {showOsmBase && selectedItem ? (
-            <iframe
-              title="OpenStreetMap Base"
-              className="absolute inset-0 h-full w-full border-0 opacity-85 pointer-events-none"
-              loading="lazy"
-              src={`https://www.openstreetmap.org/export/embed.html?bbox=${selectedItem.coords.lng - 0.018}%2C${selectedItem.coords.lat - 0.012}%2C${selectedItem.coords.lng + 0.018}%2C${selectedItem.coords.lat + 0.012}&layer=mapnik`}
+        <div ref={mapStageRef}>
+          {/* Map View Canvas Container (مربع؛ تصویر نقشه و نشانگرها با یک تصویرسازی یکسان) */}
+          <div className="relative w-full aspect-square overflow-hidden bg-slate-200 select-none">
+            <div className="absolute inset-0 bg-[linear-gradient(90deg,#cbd5e1_1px,transparent_1px),linear-gradient(#cbd5e1_1px,transparent_1px)] bg-[size:28px_28px] bg-slate-100" />
+            <MapCanvas
+              view={mapView}
+              pins={mapPins}
+              selectedId={selectedPinId}
+              onSelect={setMapSelectedBuildingId}
+              userLat={gpsLat}
+              userLng={gpsLng}
+              ringRadiusM={nearbyMode && mapOrigin ? mapRadiusM : null}
+              showTiles={showOsmBase}
             />
-          ) : (
-            <div className="absolute inset-0 bg-[linear-gradient(90deg,#cbd5e1_1px,transparent_1px),linear-gradient(#cbd5e1_1px,transparent_1px)] bg-[size:28px_28px] bg-slate-100 opacity-90" />
-          )}
 
-          {/* Interactive Map Overlay with Location Arrow Markers */}
-          <div className="absolute inset-0 z-10 overflow-hidden">
-            {filteredBuildings.map((b) => {
-              const isSelected = selectedItem?.contract.id === b.contract.id;
-              // Normalize coordinate to percent
-              const rawX = ((b.coords.lng - minLng) / (maxLng - minLng)) * 86 + 7;
-              const rawY = ((maxLat - b.coords.lat) / (maxLat - minLat)) * 82 + 9;
-              const posX = Math.max(5, Math.min(95, rawX));
-              const posY = Math.max(8, Math.min(92, rawY));
+            {/* Floating Map Controls */}
+            <div className="absolute top-3 left-3 z-30 flex flex-col gap-1.5">
+              <button
+                type="button"
+                onClick={() => setShowOsmBase((v) => !v)}
+                aria-pressed={showOsmBase}
+                className="flex h-8 w-8 items-center justify-center rounded-xl bg-white text-gray-700 shadow-md hover:bg-gray-100 transition active:scale-95"
+                title="تغییر حالت نقشه شهری / معابر"
+              >
+                <Layers size={16} />
+              </button>
 
-              return (
-                <div
-                  key={b.contract.id}
-                  style={{ left: `${posX}%`, top: `${posY}%` }}
-                  className="absolute -translate-x-1/2 -translate-y-full transition-transform duration-200 cursor-pointer"
-                  onClick={() => setMapSelectedBuildingId(b.contract.id)}
-                >
-                  {/* Distinctive Location Arrow Pin with Service Count Badge */}
-                  <div className="relative flex flex-col items-center group">
-                    {/* Pulsing ring if selected */}
-                    {isSelected && (
-                      <span className="absolute -inset-2 rounded-full bg-violet-500/30 animate-ping pointer-events-none" />
-                    )}
+              <button
+                type="button"
+                onClick={() => void locateTechnician()}
+                className="flex h-8 w-8 items-center justify-center rounded-xl bg-white text-blue-600 shadow-md hover:bg-gray-100 transition active:scale-95"
+                title="مرکز کردن روی موقعیت من"
+              >
+                <Locate size={16} className={isLocatingUser ? "animate-spin" : ""} />
+              </button>
+            </div>
 
-                    {/* Arrow / Pin Body with Service Count */}
-                    <div
-                      className={`relative flex items-center justify-center rounded-2xl shadow-xl border-2 transition-all duration-150 ${
-                        isSelected
-                          ? "bg-violet-700 text-white border-white scale-110 z-30"
-                          : b.pendingCount > 0
-                          ? "bg-amber-500 text-white border-white hover:scale-105 z-20"
-                          : "bg-emerald-600 text-white border-white hover:scale-105 z-10"
-                      } px-2 py-1 gap-1 min-w-[52px]`}
-                    >
-                      <Navigation size={11} className={isSelected ? "rotate-45" : "-rotate-45"} />
-                      <div className="flex flex-col items-center leading-none">
-                        <span className="text-[11px] font-black font-mono">
-                          {b.pendingCount}
-                        </span>
-                        <span className="text-[7.5px] opacity-90 font-medium">سرویس</span>
-                      </div>
-                      {b.coords.isRegistered && (
-                        <span className="h-1.5 w-1.5 rounded-full bg-white/90" title="GPS ثبت شده" />
+            {/* Legend Info Tag */}
+            <div className="absolute bottom-2 left-2 z-20 flex items-center gap-2 rounded-lg bg-black/70 px-2 py-1 text-[9px] text-white">
+              <span className="flex items-center gap-1">
+                <span className="h-2 w-2 rounded-full bg-amber-500" />
+                <span>دارای سرویس</span>
+              </span>
+              <span className="flex items-center gap-1">
+                <span className="h-2 w-2 rounded-full bg-emerald-500" />
+                <span>انجام‌شده</span>
+              </span>
+            </div>
+          </div>
+
+          {/* Selected Building Quick Action Bottom Sheet */}
+          {selectedItem && (
+            <div className="bg-white border-t border-gray-200 p-3.5 shadow-2xl z-30" data-map-sheet={selectedItem.contract.id}>
+              <div className="flex items-start justify-between gap-2">
+                <div className="flex items-start gap-2.5 min-w-0 flex-1">
+                  <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-violet-50 text-violet-700 shadow-xs mt-0.5">
+                    <Building2 size={22} />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="text-[14px] font-bold text-gray-800">{selectedItem.contract.building.replace(/^\*\s*/, "")}</span>
+                      <span className="rounded-md bg-blue-100 px-1.5 py-0.5 text-[10px] font-mono font-bold text-blue-700">#{selectedItem.contract.no}</span>
+                      {selectedItem.isRegistered ? (
+                        <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[9.5px] font-semibold text-emerald-800">✓ GPS ثبت شده</span>
+                      ) : (
+                        <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[9.5px] font-semibold text-amber-800">موقعیت ثبت نشده</span>
                       )}
                     </div>
 
-                    {/* Arrow Pointer Stem */}
-                    <div
-                      className={`w-0 h-0 border-l-[6px] border-l-transparent border-r-[6px] border-r-transparent border-t-[8px] ${
-                        isSelected
-                          ? "border-t-violet-700"
-                          : b.pendingCount > 0
-                          ? "border-t-amber-500"
-                          : "border-t-emerald-600"
-                      } drop-shadow-sm -mt-0.5`}
-                    />
+                    <div className="mt-0.5 text-[11px] text-gray-500 truncate">{selectedItem.contract.address || "قزوین"}</div>
 
-                    {/* Attached Building Name & Distance Label */}
-                    <div
-                      className={`mt-1 flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[9px] font-bold backdrop-blur-md shadow-md whitespace-nowrap transition ${
-                        isSelected
-                          ? "bg-violet-900/90 text-white ring-1 ring-white/50"
-                          : "bg-black/75 text-white"
-                      }`}
-                    >
-                      <span className="max-w-[70px] truncate">
-                        {b.contract.building.replace(/^\*\s*/, "")}
-                      </span>
-                      {b.distM !== null && (
-                        <span className="text-amber-300 font-mono text-[8.5px]">
-                          {b.distM < 1000 ? `${b.distM}م` : `${(b.distM / 1000).toFixed(1)}ک`}
-                        </span>
+                    {/* Service Count Stats & Distance */}
+                    <div className="mt-1 flex items-center gap-2 text-[10.5px] text-gray-600 flex-wrap">
+                      <span className="text-emerald-700 font-medium">✓ {selectedItem.doneCount} انجام‌شده</span>
+                      <span className="text-amber-700 font-medium">• {selectedItem.pendingCount} باقی‌مانده</span>
+                      {selectedItem.distM !== null && (
+                        <span className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-slate-700">فاصله: {distanceText(selectedItem.distM)}</span>
                       )}
                     </div>
                   </div>
                 </div>
-              );
-            })}
 
-            {/* User GPS Pin (Blue pulsing beacon) */}
-            {userGps && (
-              <div
-                style={{
-                  left: `${Math.max(5, Math.min(95, ((userGps.lng - minLng) / (maxLng - minLng)) * 86 + 7))}%`,
-                  top: `${Math.max(8, Math.min(92, ((maxLat - userGps.lat) / (maxLat - minLat)) * 82 + 9))}%`,
-                }}
-                className="absolute -translate-x-1/2 -translate-y-1/2 z-40 pointer-events-none"
-              >
-                <div className="relative flex items-center justify-center">
-                  <span className="absolute h-8 w-8 rounded-full bg-blue-500/35 animate-ping" />
-                  <span className="flex h-5 w-5 items-center justify-center rounded-full bg-blue-600 border-2 border-white shadow-lg text-white">
-                    <Crosshair size={11} />
-                  </span>
-                  <span className="absolute top-6 rounded-md bg-blue-900/90 px-1.5 py-0.5 text-[8.5px] font-bold text-white shadow">
-                    شما اینجایید
-                  </span>
-                </div>
+                {/* Close / Deselect */}
+                <button
+                  type="button"
+                  onClick={() => setMapSelectedBuildingId(-1)}
+                  aria-label="بستن کارت ساختمان"
+                  className="rounded-full p-1 text-gray-400 hover:bg-gray-100"
+                >
+                  <X size={16} />
+                </button>
               </div>
-            )}
-          </div>
 
-          {/* Floating Map Controls */}
-          <div className="absolute top-3 left-3 z-30 flex flex-col gap-1.5">
-            <button
-              type="button"
-              onClick={() => setShowOsmBase((v) => !v)}
-              className="flex h-8 w-8 items-center justify-center rounded-xl bg-white/95 text-gray-700 shadow-md backdrop-blur-md hover:bg-gray-100 transition active:scale-95"
-              title="تغییر حالت نقشه شهری / معابر"
-            >
-              <Layers size={16} />
-            </button>
+              {/* Quick Action Buttons */}
+              <div className="mt-3 grid grid-cols-4 gap-2">
+                {/* 1. Start Service Out-of-turn */}
+                <button
+                  type="button"
+                  onClick={() => (isMyActiveService(selectedItem.targetJob) ? continueService(selectedItem.targetJob) : startService(selectedItem.targetJob))}
+                  className="col-span-2 flex items-center justify-center gap-1.5 rounded-xl bg-emerald-600 py-2.5 px-3 text-[12px] font-bold text-white shadow-xs hover:bg-emerald-700 active:scale-95 transition"
+                >
+                  {isMyActiveService(selectedItem.targetJob) ? <Pause size={15} className="fill-white" /> : <Play size={15} className="fill-white" />}
+                  <span>{isMyActiveService(selectedItem.targetJob) ? `ادامه سرویس در حال انجام (${selectedItem.nextMonth.m})` : `شروع سرویس (${selectedItem.nextMonth.m})`}</span>
+                </button>
 
-            <button
-              type="button"
-              onClick={locateTechnician}
-              className="flex h-8 w-8 items-center justify-center rounded-xl bg-white/95 text-blue-600 shadow-md backdrop-blur-md hover:bg-gray-100 transition active:scale-95"
-              title="مرکز کردن روی موقعیت من"
-            >
-              <Locate size={16} className={isLocatingUser ? "animate-spin" : ""} />
-            </button>
-          </div>
+                {/* 2. Navigation: فقط با مختصات واقعی ثبت‌شده (قبلاً به یک نقطهٔ حدسی هدایت می‌کرد) */}
+                <button
+                  type="button"
+                  aria-disabled={!selectedItem.isRegistered}
+                  onClick={() =>
+                    selectedItem.isRegistered
+                      ? openNavigation({
+                          building: selectedItem.contract.building,
+                          address: selectedItem.contract.address,
+                          lat: selectedItem.lat as number,
+                          lng: selectedItem.lng as number,
+                        })
+                      : notify("موقعیت این ساختمان ثبت نشده؛ برای مسیریابی دقیق اول «ثبت GPS» را بزنید")
+                  }
+                  className={`flex items-center justify-center gap-1 rounded-xl py-2.5 px-2 text-[11px] font-bold shadow-xs active:scale-95 transition ${
+                    selectedItem.isRegistered ? "bg-violet-600 text-white hover:bg-violet-700" : "bg-violet-200 text-violet-700"
+                  }`}
+                >
+                  <Navigation size={13} />
+                  <span>مسیریابی</span>
+                </button>
 
-          {/* Legend Info Tag */}
-          <div className="absolute bottom-2 left-2 z-20 flex items-center gap-2 rounded-lg bg-black/70 backdrop-blur-md px-2 py-1 text-[9px] text-white">
-            <span className="flex items-center gap-1">
-              <span className="h-2 w-2 rounded-full bg-amber-500" />
-              <span>دارای سرویس</span>
-            </span>
-            <span className="flex items-center gap-1">
-              <span className="h-2 w-2 rounded-full bg-emerald-500" />
-              <span>انجام‌شده</span>
-            </span>
-          </div>
+                {/* 3. Register / Adjust GPS Location */}
+                <button
+                  type="button"
+                  onClick={() => registerContractPosition(selectedItem.contract)}
+                  className="flex items-center justify-center gap-1 rounded-xl bg-gray-100 py-2.5 px-2 text-[11px] font-medium text-gray-700 hover:bg-gray-200 active:scale-95 transition"
+                  title="ثبت یا اصلاح موقعیت جغرافیایی این ساختمان"
+                >
+                  <MapPin size={13} className="text-amber-600" />
+                  <span>ثبت GPS</span>
+                </button>
+              </div>
+            </div>
+          )}
         </div>
 
-        {/* Selected Building Quick Action Bottom Sheet */}
-        {selectedItem && (
-          <div className="bg-white border-t border-gray-200 p-3.5 shadow-2xl z-30 animate-in slide-in-from-bottom-2 duration-150">
-            <div className="flex items-start justify-between gap-2">
-              <div className="flex items-start gap-2.5 min-w-0 flex-1">
-                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-violet-50 text-violet-700 shadow-xs mt-0.5">
-                  <Building2 size={22} />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-1.5 flex-wrap">
-                    <span className="text-[14px] font-bold text-gray-800">
-                      {selectedItem.contract.building.replace(/^\*\s*/, "")}
-                    </span>
-                    <span className="rounded-md bg-blue-100 px-1.5 py-0.5 text-[10px] font-mono font-bold text-blue-700">
-                      #{selectedItem.contract.no}
-                    </span>
-                    {selectedItem.coords.isRegistered ? (
-                      <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[9.5px] font-semibold text-emerald-800">
-                        ✓ GPS ثبت شده
-                      </span>
-                    ) : (
-                      <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[9.5px] font-semibold text-amber-800">
-                        موقعیت تقریبی
-                      </span>
-                    )}
-                  </div>
-
-                  <div className="mt-0.5 text-[11px] text-gray-500 truncate">
-                    {selectedItem.contract.address || "قزوین"}
-                  </div>
-
-                  {/* Service Count Stats & Distance */}
-                  <div className="mt-1 flex items-center gap-2 text-[10.5px] text-gray-600 flex-wrap">
-                    <span className="text-emerald-700 font-medium">
-                      ✓ {selectedItem.doneCount} انجام‌شده
-                    </span>
-                    <span className="text-amber-700 font-medium">
-                      • {selectedItem.pendingCount} باقی‌مانده
-                    </span>
-                    {selectedItem.distM !== null && (
-                      <span className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-slate-700">
-                        فاصله: {selectedItem.distM < 1000 ? `${selectedItem.distM} متر` : `${(selectedItem.distM / 1000).toFixed(1)} کیلومتر`}
-                      </span>
-                    )}
-                  </div>
-                </div>
-              </div>
-
-              {/* Close / Deselect */}
-              <button
-                type="button"
-                onClick={() => setMapSelectedBuildingId(null)}
-                className="rounded-full p-1 text-gray-400 hover:bg-gray-100"
-              >
-                <X size={16} />
+        {/* فهرست همان ساختمان‌هایی که روی نقشه‌اند (نزدیک‌ترین اول) */}
+        <div className="bg-white border-t border-gray-200" data-map-list="">
+          <div className="flex items-center justify-between px-3 py-2 text-[11px] text-gray-600">
+            <span>
+              {fa(shown)} از {fa(total)} ساختمان
+              {searching ? " (جستجو در همهٔ ساختمان‌ها)" : ""}
+              {userGps && shown > 0 ? " · نزدیک‌ترین اول" : ""}
+            </span>
+            {searching && (
+              <button type="button" onClick={() => setMapSearch("")} className="font-bold text-blue-700">
+                بازگشت به «نزدیک من»
               </button>
-            </div>
-
-            {/* Quick Action Buttons */}
-            <div className="mt-3 grid grid-cols-4 gap-2">
-              {/* 1. Start Service Out-of-turn */}
-              <button
-                type="button"
-                onClick={() => (isMyActiveService(selectedItem.targetJob) ? continueService(selectedItem.targetJob) : startService(selectedItem.targetJob))}
-                className="col-span-2 flex items-center justify-center gap-1.5 rounded-xl bg-emerald-600 py-2.5 px-3 text-[12px] font-bold text-white shadow-xs hover:bg-emerald-700 active:scale-95 transition"
-              >
-                {isMyActiveService(selectedItem.targetJob) ? <Pause size={15} className="fill-white" /> : <Play size={15} className="fill-white" />}
-                <span>{isMyActiveService(selectedItem.targetJob) ? `ادامه سرویس در حال انجام (${selectedItem.nextMonth.m})` : `شروع سرویس (${selectedItem.nextMonth.m})`}</span>
-              </button>
-
-              {/* 2. Navigation */}
-              <button
-                type="button"
-                onClick={() =>
-                  openNavigation({
-                    building: selectedItem.contract.building,
-                    address: selectedItem.contract.address,
-                    lat: selectedItem.coords.lat,
-                    lng: selectedItem.coords.lng,
-                  })
-                }
-                className="flex items-center justify-center gap-1 rounded-xl bg-violet-600 py-2.5 px-2 text-[11px] font-bold text-white shadow-xs hover:bg-violet-700 active:scale-95 transition"
-              >
-                <Navigation size={13} />
-                <span>مسیریابی</span>
-              </button>
-
-              {/* 3. Register / Adjust GPS Location */}
-              <button
-                type="button"
-                onClick={() => registerContractPosition(selectedItem.contract)}
-                className="flex items-center justify-center gap-1 rounded-xl bg-gray-100 py-2.5 px-2 text-[11px] font-medium text-gray-700 hover:bg-gray-200 active:scale-95 transition"
-                title="ثبت یا اصلاح موقعیت جغرافیایی این ساختمان"
-              >
-                <MapPin size={13} className="text-amber-600" />
-                <span>ثبت GPS</span>
-              </button>
-            </div>
+            )}
           </div>
-        )}
+          {unregisteredCount > 0 && (
+            <div className="px-3 pb-2 text-[10px] leading-5 text-gray-500" data-map-coverage="">
+              موقعیت GPS برای {fa(mapCoverage.registered)} از {fa(mapRows.length)} ساختمان ثبت شده است؛ فقط همین‌ها روی نقشه می‌آیند. بقیه را از جستجو پیدا کنید و «ثبت GPS» بزنید.
+            </div>
+          )}
+
+          {shown === 0 && (
+            <div className="px-3 pb-4 pt-1 text-center text-[11.5px] leading-6 text-gray-500" data-map-empty="">
+              {searching ? (
+                <div>ساختمانی با این عبارت پیدا نشد.</div>
+              ) : mapFilter === "nearby" && !userGps ? (
+                <div className="space-y-2">
+                  <div>برای نمایش ساختمان‌های اطراف، موقعیت شما لازم است.</div>
+                  <button type="button" onClick={() => void locateTechnician()} className="rounded-xl bg-blue-600 px-4 py-2 text-[11.5px] font-bold text-white">
+                    دریافت موقعیت من
+                  </button>
+                </div>
+              ) : mapFilter === "nearby" ? (
+                <div className="space-y-2">
+                  <div>
+                    در شعاع {radiusText(mapRadiusM)} شما ساختمانِ دارای GPS ثبت‌شده‌ای نیست.
+                    {unregisteredCount > 0 && ` (${fa(unregisteredCount)} ساختمان هنوز GPS ندارند.)`}
+                  </div>
+                  <div className="flex flex-wrap items-center justify-center gap-2">
+                    {mapRadiusM < MAP_RADIUS_CHOICES[MAP_RADIUS_CHOICES.length - 1] && (
+                      <button
+                        type="button"
+                        onClick={() => setMapRadiusM(MAP_RADIUS_CHOICES.find((meters) => meters > mapRadiusM) ?? mapRadiusM)}
+                        className="rounded-xl bg-purple-600 px-3 py-2 text-[11px] font-bold text-white"
+                      >
+                        شعاع بزرگ‌تر
+                      </button>
+                    )}
+                    <button type="button" onClick={() => pickFilter("pending")} className="rounded-xl bg-amber-600 px-3 py-2 text-[11px] font-bold text-white">
+                      انجام‌نشده‌های ماه گذشته
+                    </button>
+                    <button type="button" onClick={() => pickFilter("all")} className="rounded-xl bg-gray-100 px-3 py-2 text-[11px] font-bold text-gray-700">
+                      همه ساختمان‌ها
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div>موردی برای نمایش نیست.</div>
+              )}
+            </div>
+          )}
+
+          {mapItems.map((item) => {
+            const active = selectedItem?.contract.id === item.contract.id;
+            return (
+              <button
+                key={item.contract.id}
+                type="button"
+                data-map-row={item.contract.id}
+                aria-current={active}
+                onClick={() => selectBuilding(item.contract.id)}
+                className={`flex w-full items-center gap-2 border-t border-gray-100 px-3 py-2 text-right ${active ? "bg-violet-50" : "bg-white"}`}
+              >
+                <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${item.pendingCount > 0 ? "bg-amber-500" : "bg-emerald-600"}`} />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-[12px] font-bold text-gray-800">{item.contract.building.replace(/^\*\s*/, "")}</span>
+                  <span className="block truncate text-[10px] text-gray-500">
+                    #{item.contract.no}
+                    {item.contract.address ? ` · ${item.contract.address}` : ""}
+                  </span>
+                </span>
+                {item.distM !== null ? (
+                  <span className="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] text-slate-700">{distanceText(item.distM)}</span>
+                ) : (
+                  <span className="shrink-0 rounded bg-amber-50 px-1.5 py-0.5 text-[9.5px] text-amber-700">{item.isRegistered ? "GPS ثبت‌شده" : "بدون GPS"}</span>
+                )}
+              </button>
+            );
+          })}
+
+          {total > shown && shown > 0 && (
+            <div className="border-t border-gray-100 p-3 text-center">
+              {mapLimit < MAP_MAX_ITEMS ? (
+                <button
+                  type="button"
+                  onClick={() => setMapLimit((limit) => Math.min(MAP_MAX_ITEMS, limit + MAP_PAGE_SIZE))}
+                  className="rounded-xl bg-gray-100 px-4 py-2 text-[11.5px] font-bold text-gray-700"
+                >
+                  نمایش بیشتر ({fa(total - shown)} مورد دیگر)
+                </button>
+              ) : (
+                <div className="text-[10.5px] text-gray-500">برای دیدن بقیه، جستجو کنید یا شعاع را کمتر کنید.</div>
+              )}
+            </div>
+          )}
+        </div>
 
         <div className="h-16" />
       </div>

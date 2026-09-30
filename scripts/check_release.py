@@ -31,6 +31,12 @@ def main():
               not any(b"__TLIFT_TEST_ISOLATED__" in archive.read(n) for n in names if n.endswith(".js")),
               "test harness is excluded from production ZIP")
         check(not any(n.lower().endswith((".apk", ".zip", ".tmp")) for n in names), "no APK or nested archives in cPanel ZIP")
+        manifests = [json.loads(archive.read(n)) for n in ("manifest.webmanifest",) if n in names]
+        manifests.append(json.loads((ROOT / "public/manifest.json").read_text()))
+        htaccess = archive.read(".htaccess").decode("utf-8")
+        check(all(m.get("start_url") == "/" and m.get("id") == "/asemansara-app-v3" and m.get("display") == "standalone" for m in manifests) and
+              "application/manifest+json" in htaccess and "sw\\.js" in htaccess,
+              "install files: clean start_url, unchanged app id, manifest MIME and no-cache rules for sw.js/manifest")
         dist = ROOT / "dist"
         expected = {p.relative_to(dist).as_posix() for p in dist.rglob("*") if p.is_file() and not p.name.endswith((".zip", ".tmp"))}
         check(names == expected, "ZIP inventory matches current dist")

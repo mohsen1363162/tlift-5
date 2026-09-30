@@ -26,7 +26,7 @@ export default function AndroidAppModal({
   onClose,
   onOpenMobileView,
 }: AndroidAppModalProps) {
-  const { isInstallable, isInstalled, isAndroid, isIOS, install } = usePWAInstall();
+  const { isInstallable, isInstalled, isIOS, isWebView, install } = usePWAInstall();
   const [copied, setCopied] = useState(false);
   const [installing, setInstalling] = useState(false);
   const [updating, setUpdating] = useState(false);
@@ -35,7 +35,7 @@ export default function AndroidAppModal({
   if (!open) return null;
 
   const currentUrl = typeof window !== "undefined" ? window.location.origin : "https://emami-asemansara.ir";
-  const mobileAppUrl = `${currentUrl}/?mode=mobile`;
+  const mobileAppUrl = `${currentUrl}/`;
 
   const copyMobileLink = async () => {
     try {
@@ -120,28 +120,62 @@ export default function AndroidAppModal({
                 <span>برنامه T_lift روی این گوشی نصب است و به صورت نرم‌افزار مستقل اجرا می‌شود</span>
               </div>
             ) : isInstallable ? (
-              <button
-                type="button"
-                onClick={handleInstallClick}
-                disabled={installing}
-                className="flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 py-3.5 font-bold text-white shadow-lg hover:bg-emerald-700 active:scale-95 transition disabled:opacity-60"
-              >
-                <Download size={20} />
-                <span>{installing ? "در حال افزودن و نصب T_lift..." : "نصب فوری «T_lift» روی صفحه اصلی"}</span>
-              </button>
+              <>
+                <button
+                  type="button"
+                  onClick={handleInstallClick}
+                  disabled={installing}
+                  className="flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 py-3.5 font-bold text-white shadow-lg hover:bg-emerald-700 active:scale-95 transition disabled:opacity-60"
+                >
+                  <Download size={20} />
+                  <span>{installing ? "در حال افزودن و نصب T_lift..." : "نصب فوری «T_lift» روی صفحه اصلی"}</span>
+                </button>
+                <p data-install-note="" className="text-[11.5px] leading-6 text-emerald-950/80 dark:text-emerald-300/90">
+                  بعد از نصب، آیکن بدون نشان کوچک Chrome روی صفحهٔ اصلی می‌آید و مثل یک برنامهٔ جدا (بدون نوار آدرس) باز می‌شود.
+                </p>
+              </>
+            ) : isIOS ? (
+              <div data-install-guide="ios" className="rounded-xl bg-white/90 p-3 text-[12px] leading-6 dark:bg-neutral-900/80 space-y-1.5 border border-emerald-200 dark:border-emerald-900">
+                <div className="font-bold text-emerald-900 dark:text-emerald-300">راهنمای نصب روی آیفون و آیپد (Safari):</div>
+                <div>۱. این صفحه را در <strong>Safari</strong> باز کنید.</div>
+                <div>۲. دکمهٔ اشتراک‌گذاری (مربع با فلش رو به بالا) را لمس کنید.</div>
+                <div>۳. <strong>«Add to Home Screen» (افزودن به صفحهٔ اصلی)</strong> را بزنید و نام «T_lift» را تأیید کنید. در Safari این کار یک برنامهٔ مستقل می‌سازد.</div>
+              </div>
             ) : (
-              <div className="rounded-xl bg-white/90 p-3 text-[12px] leading-6 dark:bg-neutral-900/80 space-y-1.5 border border-emerald-200 dark:border-emerald-900">
+              <div data-install-guide="chrome" className="rounded-xl bg-white/90 p-3 text-[12px] leading-6 dark:bg-neutral-900/80 space-y-1.5 border border-emerald-200 dark:border-emerald-900">
                 <div className="font-bold text-emerald-900 dark:text-emerald-300">
-                  راهنمای نصب به عنوان نرم‌افزار بدون علامت مرورگر:
+                  راهنمای نصب به عنوان نرم‌افزار مستقل (بدون نشان Chrome):
+                </div>
+                {isWebView && (
+                  <div data-install-webview="" className="rounded-lg bg-rose-50 p-2 text-rose-800">
+                    این صفحه داخل مرورگر داخلی یک برنامه (مثل تلگرام، ایتا یا بله) باز شده و از اینجا نصب ممکن نیست. آدرس پایین را کپی کنید و در <strong>Chrome</strong> باز کنید.
+                  </div>
+                )}
+                <div>
+                  ۱. این صفحه را در خود مرورگر <strong>Chrome</strong> باز کنید (نه داخل مرورگر برنامه‌های دیگر) و یک‌بار صفحه را تازه کنید.
                 </div>
                 <div>
-                  ۱. در بالای مرورگر، منوی سه‌نقطه (⋮) را لمس کنید.
+                  ۲. منوی سه‌نقطه (⋮) را لمس کنید و <strong>«نصب برنامه» (Install app)</strong> را بزنید.
                 </div>
                 <div>
-                  ۲. گزینه <strong>«نصب برنامه» (Install app)</strong> یا <strong>«افزودن به صفحه اصلی» (Add to Home screen)</strong> را انتخاب نمایید.
+                  ۳. <strong>«افزودن به صفحه اصلی» (Add to Home screen) را نزنید</strong>؛ آن فقط یک میان‌بر می‌سازد که داخل مرورگر باز می‌شود و روی آیکنش نشان کوچک Chrome است.
                 </div>
                 <div>
-                  ۳. نام برنامه به صورت خودکار <strong>«T_lift»</strong> ذخیره شده و بدون آیکون کروم مانند یک برنامه عادی در لیست اپلیکیشن‌های شما قرار می‌گیرد.
+                  ۴. اگر «نصب برنامه» در منو نیست، چند ثانیه صبر کنید و منو را دوباره باز کنید؛ Chrome تا آماده‌شدن برنامه آن را نشان نمی‌دهد.
+                </div>
+              </div>
+            )}
+
+            {!isInstalled && (
+              <div data-shortcut-help="" className="rounded-xl border border-amber-200 bg-amber-50/90 p-3 text-[12px] leading-6 text-amber-950 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-200 space-y-1">
+                <div className="font-bold">روی آیکن گوشی، نشان کوچک Chrome (گوشهٔ پایین-راست) دارید؟</div>
+                <div>
+                  آیکنی که نشان Chrome دارد و فقط «حذف» (Remove) می‌دهد، <strong>میان‌بر</strong> است نه برنامهٔ نصب‌شده؛ پس داخل مرورگر و با آدرس سایت باز می‌شود.
+                </div>
+                <div>۱. آن آیکن را از صفحهٔ اصلی پاک کنید.</div>
+                <div>۲. با دکمهٔ «نصب» بالا (یا «نصب برنامه» در منوی Chrome) دوباره نصب کنید.</div>
+                <div>
+                  ۳. اگر باز هم نشان Chrome آمد، یعنی Chrome نتوانسته برنامه را از سرور گوگل بسازد (قطع یا محدود بودن سرویس‌های گوگل روی اینترنت شما). یک‌بار نصب را با اینترنتی انجام دهید که سرویس‌های گوگل روی آن باز است (مثلاً VPN خودتان)؛ بعد از ساخته‌شدن برنامه، کار روزمره به آن نیاز ندارد.
                 </div>
               </div>
             )}
@@ -263,7 +297,7 @@ export default function AndroidAppModal({
 
         {/* Footer */}
         <div className="border-t pt-3 border-neutral-100 dark:border-neutral-800 flex items-center justify-between text-[11.5px] text-neutral-500">
-          <span>پشتیبانی از اندروید ۵ به بالا (APK و وب)</span>
+          <span>اندروید ۵ به بالا با مرورگر Chrome · آیفون با Safari</span>
           <button
             type="button"
             onClick={onClose}
